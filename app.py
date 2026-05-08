@@ -92,7 +92,6 @@ with tab1:
                 df_today = df_index[df_index['date'] == today_date].copy()
                 df_yest = df_index[df_index['date'] == yest_date].copy()
                 
-                # --- XỬ LÝ CHỈ SỐ ĐIỂM ---
                 current_score = df_today.iloc[-1]['close']
                 latest_time = df_today.iloc[-1]['time']
                 ref_price = df_yest.iloc[-1]['close']
@@ -108,7 +107,6 @@ with tab1:
                 
                 st.divider()
                 
-                # --- VẼ BIỂU ĐỒ THANH KHOẢN SO SÁNH ---
                 st.markdown("### 🌊 Biểu đồ Thanh khoản (Hôm nay vs Hôm qua)")
                 
                 df_today['time_str'] = pd.to_datetime(df_today['time']).dt.strftime('%H:%M')
@@ -154,6 +152,27 @@ with tab1:
 df_top100 = get_dynamic_top_100()
 
 # ==========================================
+# THIẾT LẬP DẢI MÀU CHUYÊN NGHIỆP (CHO CẢ HEATMAP & BẢNG)
+# ==========================================
+# Định nghĩa các mốc màu sắc chuẩn thị trường VN
+COLOR_CEIL = '#cc00ff'  # Tím (Trần, >= 6.8%)
+COLOR_GREEN = '#00e676' # Xanh lá (Tăng, > 0%)
+COLOR_REF = '#f5b041'   # Vàng không chói (Tham chiếu, = 0%)
+COLOR_RED = '#ff4d4d'   # Đỏ bình thường (Giảm < 3%)
+COLOR_DRED = '#b30000'  # Đỏ đậm (Giảm >= 3%)
+COLOR_FLOOR = '#00e5ff' # Xanh lơ (Sàn, <= -6.8%)
+
+# Thang màu đặc biệt cho Plotly Treemap (Khóa biên độ từ -7% đến +7%)
+custom_color_scale = [
+    [0.0, COLOR_FLOOR], [0.014, COLOR_FLOOR],    # Xanh lơ (Từ -7% đến -6.8%)
+    [0.014, COLOR_DRED], [0.285, COLOR_DRED],    # Đỏ đậm (Từ -6.8% đến -3.0%)
+    [0.285, COLOR_RED], [0.499, COLOR_RED],      # Đỏ thường (Từ -3.0% đến sát 0%)
+    [0.499, COLOR_REF], [0.501, COLOR_REF],      # Vàng (Ngay tại mốc 0%)
+    [0.501, COLOR_GREEN], [0.985, COLOR_GREEN],  # Xanh lá (Từ qua 0% đến 6.8%)
+    [0.985, COLOR_CEIL], [1.0, COLOR_CEIL]       # Tím (Từ 6.8% đến 7%)
+]
+
+# ==========================================
 # TAB 2: BẢN ĐỒ NHIỆT (HEATMAP DÒNG TIỀN)
 # ==========================================
 with tab2:
@@ -163,8 +182,8 @@ with tab2:
             path=[px.Constant("Thị trường"), 'Nhóm Ngành', 'Mã CK'], 
             values='Tổng KL', 
             color='%', 
-            color_continuous_scale=['#ff4d4d', '#2b2b2b', '#00e676'], 
-            color_continuous_midpoint=0,
+            color_continuous_scale=custom_color_scale, 
+            range_color=[-7, 7], # Khóa chặt biên độ để màu không bị lệch khi tính toán
             custom_data=['%', 'Tổng KL', 'Giá']
         )
         fig.update_traces(
@@ -184,11 +203,15 @@ with tab3:
     if not df_top100.empty:
         st.markdown("### 📊 Biến động 100 cổ phiếu có thanh khoản lớn nhất hôm nay")
         
-        def color_change(val):
+        # Hàm tô màu đồng bộ với Heatmap
+        def get_text_color(val):
             if pd.isna(val): return ''
-            if val > 0: return 'color: #00e676; font-weight: bold;'
-            elif val < 0: return 'color: #ff4d4d; font-weight: bold;'
-            else: return 'color: #f5b041; font-weight: bold;'
+            if val >= 6.8: return f'color: {COLOR_CEIL}; font-weight: bold;'
+            elif val <= -6.8: return f'color: {COLOR_FLOOR}; font-weight: bold;'
+            elif val > 0: return f'color: {COLOR_GREEN}; font-weight: bold;'
+            elif val == 0: return f'color: {COLOR_REF}; font-weight: bold;'
+            elif val > -3.0: return f'color: {COLOR_RED}; font-weight: bold;'
+            else: return f'color: {COLOR_DRED}; font-weight: bold;'
             
         format_dict = {
             'Giá': '{:,.2f}',
@@ -198,9 +221,9 @@ with tab3:
         }
         
         try:
-            styled_df = df_top100.style.format(format_dict).map(color_change, subset=['+/-', '%'])
+            styled_df = df_top100.style.format(format_dict).map(get_text_color, subset=['+/-', '%'])
         except:
-            styled_df = df_top100.style.format(format_dict).applymap(color_change, subset=['+/-', '%'])
+            styled_df = df_top100.style.format(format_dict).applymap(get_text_color, subset=['+/-', '%'])
         
         st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
     else:
