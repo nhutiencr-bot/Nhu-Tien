@@ -1,37 +1,90 @@
+import streamlit as st
+import pandas as pd
+from vnstock import stock_historical_data, listing_companies
+from datetime import datetime, timedelta
+import pytz
+import time
+import plotly.express as px
+import plotly.graph_objects as go
+import concurrent.futures
+import requests
+
+# 1. CÀI ĐẶT GIAO DIỆN
+st.set_page_config(page_title="Fairy Invest", page_icon="🧚‍♀️", layout="wide")
+st.title("🧚‍♀️ FAIRY INVEST - Dashboard Chứng Khoán")
+
+# 2. THIẾT LẬP THỜI GIAN VÀ KHUNG GIỜ GIAO DỊCH
+vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
+current_time = datetime.now(vn_tz)
+end_date = current_time.strftime('%Y-%m-%d')
+start_date_stock = (current_time - timedelta(days=7)).strftime('%Y-%m-%d')
+start_date_index = (current_time - timedelta(days=5)).strftime('%Y-%m-%d')
+
+is_weekday = current_time.weekday() < 5
+current_hour = current_time.hour
+current_minute = current_time.minute
+is_trading_hours = is_weekday and ((9 <= current_hour < 15) or (current_hour == 15 and current_minute <= 30))
+
+if is_trading_hours:
+    st.sidebar.success(f"🟢 ĐANG GIAO DỊCH\n\nCập nhật: {current_time.strftime('%H:%M:%S')}")
+else:
+    st.sidebar.warning(f"🔴 ĐÃ ĐÓNG CỬA\n\nChốt phiên: {end_date}")
+
+# 3. CÁC HÀM LẤY DỮ LIỆU
+@st.cache_data(ttl=86400)
+def get_company_sectors():
+    try:
+        df = listing_companies()
+        hose_df = df[(df['comGroupCode'] == 'HOSE') & (df['ticker'].str.len() == 3)]
+        return hose_df[['ticker', 'sector']].set_index('ticker').to_dict()['sector']
+    except:
+        return {}
+
+@st.cache_data(ttl=300)
+def get_dynamic_top_100():
+    sector_dict = get_company_sectors()
+    tickers = list(sector_dict.keys())
+    
+    def fetch_ticker(ticker):
+        try:
+            df = stock_historical_data(
+                symbol=ticker, 
+                start_date=start_date_stock, 
+                end_date=end_date, 
+                resolution='1D', 
+                type='stock'
+            )
+            if len(df) >= 2:
+                close_today = df.iloc[-1]['close']
+                close_yest = df.iloc[-2]['close']
+                change = close_today - close_yest
+                pct_change = (change / close_yest) * 100
+                return {
+                    'Mã CK': ticker, 
+                    'Nhóm Ngành': sector_dict.get(ticker, 'Khác'), 
+                    'Giá': close_today, 
+                    '+/-': round(change, 2), 
+                    '%': round(pct_change, 2), 
+                    'Tổng KL': int(df.iloc[-1]['volume'])
+                }
+        except:
+            return None
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futures = [executor.submit(fetch_ticker, t) for t in tickers]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res and res['Tổng KL'] > 0: results.append(res)
+                
+    df_market = pd.DataFrame(results)
+    if not df_market.empty: 
+        return df_market.sort_values(by='Tổng KL', ascending=False).head(100)
+    return df_market
+
+# HÀM LẤY ĐÓNG GÓP ĐIỂM SỐ (DÙNG API TCBS - MƯỢT MÀ KHÔNG BỊ CHẶN)
 @st.cache_data(ttl=60)
 def get_exact_contribution(df_top):
-    # Lớp 1: Gọi API của TCBS (Mở hoàn toàn, không chặn Streamlit)
+    # Lớp 1: Gọi API của TCBS
     try:
-        url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/intraday/index/ticker-contribute?index=VNINDEX"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            if 'data' in data and len(data['data']) > 0:
-                df = pd.DataFrame(data['data'])
-                # Chuyển đổi tên cột của TCBS cho khớp với hệ thống của chúng ta
-                return df[['ticker', 'point']].rename(columns={'ticker': 'Mã CK', 'point': 'Điểm'})
-    except Exception as e:
-        pass # Nếu TCBS lỗi, trôi xuống Lớp 2
-
-    # Lớp 2: Dùng vnstock3 (Nguồn phụ)
-    try:
-        from vnstock3 import Vnstock
-        vn = Vnstock()
-        df = vn.market_watch.tickers_contrib_index(index='VNINDEX')
-        if not df.empty:
-            str_cols = [c for c in df.columns if df[c].dtype == 'object']
-            num_cols = [c for c in df.columns if df[c].dtype != 'object']
-            if str_cols and num_cols:
-                return df[[str_cols[0], num_cols[0]]].rename(columns={str_cols[0]: 'Mã CK', num_cols[0]: 'Điểm'})
-    except:
-        pass
-
-    # Lớp 3: Mô phỏng dựa trên Top 100 (Chống sập giao diện)
-    if not df_top.empty:
-        df_sim = df_top.copy()
-        weights = {'VCB': 4.5, 'BID': 3.0, 'VIC': 2.5, 'VHM': 2.5, 'CTG': 2.0, 'TCB': 2.0, 'FPT': 1.8, 'HPG': 1.5, 'GAS': 1.5}
-        df_sim['Weight'] = df_sim['Mã CK'].map(lambda x: weights.get(x, 0.5))
-        df_sim['Điểm'] = (df_sim['%'] * df_sim['Weight']) / 3.0
-        return df_sim[['Mã CK', 'Điểm']]
-
-    return pd.DataFrame()
+        url = "https://apip
