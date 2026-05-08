@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
-from vnstock import stock_historical_data
+from vnstock import stock_historical_data, listing_companies
 from datetime import datetime, timedelta
 import pytz
 import time
 import plotly.express as px
+import concurrent.futures # Thư viện xử lý đa luồng giúp tăng tốc x20 lần
 
 # 1. CÀI ĐẶT GIAO DIỆN
 st.set_page_config(page_title="Fairy Invest", page_icon="🧚‍♀️", layout="wide")
@@ -17,51 +18,63 @@ end_date = current_time.strftime('%Y-%m-%d')
 start_date_index = (current_time - timedelta(days=2)).strftime('%Y-%m-%d')
 start_date_stock = (current_time - timedelta(days=7)).strftime('%Y-%m-%d')
 
-# 3. DANH SÁCH 110 CỔ PHIẾU THANH KHOẢN CAO NHẤT THEO NGÀNH
-SECTORS = {
-    'Ngân hàng': ['VCB', 'BID', 'CTG', 'TCB', 'MBB', 'VPB', 'STB', 'ACB', 'SHB', 'HDB', 'VIB', 'SSB', 'EIB', 'MSB', 'OCB', 'LPB', 'TPB', 'NAB'],
-    'Bất động sản': ['VHM', 'VIC', 'VRE', 'NVL', 'DIG', 'PDR', 'KDH', 'DXG', 'CEO', 'NLG', 'HDC', 'SCR', 'KHG', 'CRE', 'TCH', 'IJC', 'NTL'],
-    'Chứng khoán': ['SSI', 'VND', 'VCI', 'HCM', 'VIX', 'SHS', 'MBS', 'FTS', 'BSI', 'CTS', 'AGR', 'VDS', 'ORS'],
-    'Thép / Vật liệu': ['HPG', 'HSG', 'NKG', 'HT1', 'BCC', 'KSB', 'VGC'],
-    'Xây dựng / ĐTC': ['VCG', 'HHV', 'LCG', 'FCN', 'C4G', 'CTD', 'HBC', 'HUT'],
-    'Bán lẻ / Tiêu dùng': ['MWG', 'VNM', 'MSN', 'PNJ', 'DGW', 'FRT', 'SAB', 'KDC', 'PET', 'HAX'],
-    'Năng lượng / Dầu khí': ['GAS', 'PVD', 'PVS', 'BSR', 'PLX', 'POW', 'NT2', 'GEG', 'PC1'],
-    'Hóa chất / Phân bón': ['DGC', 'DCM', 'DPM', 'CSV', 'LAS'],
-    'Cảng biển / Logistics': ['GMD', 'HAH', 'VSC', 'PVT'],
-    'Khu công nghiệp': ['KBC', 'IDC', 'SZC', 'PHR', 'GVR', 'SIP'],
-    'Công nghệ / Viễn thông': ['FPT', 'CMG', 'VGI', 'FOX'],
-    'Nông nghiệp / Thủy sản': ['HAG', 'DBC', 'BAF', 'VHC', 'ANV', 'ASM', 'IDI']
-}
+# 3. HÀM QUÉT TOÀN THỊ TRƯỜNG VÀ TÌM TOP 100 (SIÊU TỐC)
+@st.cache_data(ttl=86400) # Chỉ tải danh sách công ty 1 lần/ngày
+def get_company_sectors():
+    try:
+        df = listing_companies()
+        # Lọc lấy sàn HOSE và bỏ các mã chứng quyền (độ dài tên mã > 3)
+        hose_df = df[(df['comGroupCode'] == 'HOSE') & (df['ticker'].str.len() == 3)]
+        # Tạo từ điển map Mã CK -> Tên Ngành
+        return hose_df[['ticker', 'sector']].set_index('ticker').to_dict()['sector']
+    except:
+        return {}
 
-# 4. HÀM LẤY DỮ LIỆU THỊ TRƯỜNG (Có Cache để web chạy nhanh)
-@st.cache_data(ttl=300) # Cập nhật 5 phút / lần
-def get_market_data():
-    data = []
-    for sector, tickers in SECTORS.items():
-        for ticker in tickers:
-            try:
-                df = stock_historical_data(symbol=ticker, start_date=start_date_stock, end_date=end_date, resolution='1D', type='stock')
-                if len(df) >= 2:
-                    close_today = df.iloc[-1]['close']
-                    close_yest = df.iloc[-2]['close']
-                    change = close_today - close_yest
-                    pct_change = (change / close_yest) * 100
-                    volume = df.iloc[-1]['volume']
-                    
-                    data.append({
-                        'Mã CK': ticker,
-                        'Nhóm Ngành': sector,
-                        'Giá': close_today,
-                        '+/-': round(change, 2),
-                        '%': round(pct_change, 2),
-                        'Tổng KL': int(volume)
-                    })
-            except:
-                continue
-    return pd.DataFrame(data)
+@st.cache_data(ttl=300) # Làm mới dữ liệu Top 100 mỗi 5 phút
+def get_dynamic_top_100():
+    sector_dict = get_company_sectors()
+    tickers = list(sector_dict.keys())
+    
+    # Hàm con tải dữ liệu 1 mã
+    def fetch_ticker(ticker):
+        try:
+            df = stock_historical_data(symbol=ticker, start_date=start_date_stock, end_date=end_date, resolution='1D', type='stock')
+            if len(df) >= 2:
+                close_today = df.iloc[-1]['close']
+                close_yest = df.iloc[-2]['close']
+                change = close_today - close_yest
+                pct_change = (change / close_yest) * 100
+                volume = df.iloc[-1]['volume']
+                return {
+                    'Mã CK': ticker,
+                    'Nhóm Ngành': sector_dict.get(ticker, 'Khác'),
+                    'Giá': close_today,
+                    '+/-': round(change, 2),
+                    '%': round(pct_change, 2),
+                    'Tổng KL': int(volume)
+                }
+        except:
+            return None
 
-# 5. TẠO GIAO DIỆN 3 TABS
-tab1, tab2, tab3 = st.tabs(["📈 VN-INDEX", "🗺️ Bản đồ dòng tiền (Heatmap)", "📊 Top 100 KLGD"])
+    results = []
+    # Chạy đa luồng (20 luồng) để quét ~400 mã trong chớp mắt
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futures = [executor.submit(fetch_ticker, t) for t in tickers]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res and res['Tổng KL'] > 0:
+                results.append(res)
+                
+    df_market = pd.DataFrame(results)
+    
+    # LỌC TOP 100 MÃ CÓ THANH KHOẢN LỚN NHẤT NGÀY HÔM NAY
+    if not df_market.empty:
+        df_market = df_market.sort_values(by='Tổng KL', ascending=False).head(100)
+        
+    return df_market
+
+# 4. TẠO GIAO DIỆN 3 TABS
+tab1, tab2, tab3 = st.tabs(["📈 VN-INDEX", "🗺️ Bản đồ dòng tiền (Động)", "📊 Top 100 Active (Realtime)"])
 
 # ==========================================
 # TAB 1: VN-INDEX REALTIME
@@ -84,21 +97,21 @@ with tab1:
     except Exception as e:
         st.error("Chưa có dữ liệu VN-INDEX hiện tại.")
 
-# LẤY DỮ LIỆU CHUNG CHO TAB 2 VÀ TAB 3
-df_market = get_market_data()
+# TẢI DỮ LIỆU TOP 100 CHUNG CHO TAB 2 & 3
+df_top100 = get_dynamic_top_100()
 
 # ==========================================
 # TAB 2: BẢN ĐỒ NHIỆT (HEATMAP DÒNG TIỀN)
 # ==========================================
 with tab2:
-    if not df_market.empty:
-        # Vẽ biểu đồ Treemap
+    if not df_top100.empty:
+        # Treemap giờ đây sẽ tự động sắp xếp theo Top 100 mã thực tế của ngày
         fig = px.treemap(
-            df_market, 
+            df_top100, 
             path=[px.Constant("Thị trường"), 'Nhóm Ngành', 'Mã CK'], 
             values='Tổng KL', 
             color='%', 
-            color_continuous_scale=['#ff4d4d', '#2b2b2b', '#00e676'], # Đỏ - Đen - Xanh
+            color_continuous_scale=['#ff4d4d', '#2b2b2b', '#00e676'], 
             color_continuous_midpoint=0,
             custom_data=['%', 'Tổng KL', 'Giá']
         )
@@ -111,26 +124,22 @@ with tab2:
         fig.update_layout(margin=dict(t=20, l=10, r=10, b=10), height=650)
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("⏳ Đang tải dữ liệu Bản đồ nhiệt (Mất khoảng 10-15 giây lần đầu tiên)...")
+        st.info("⏳ Đang tải dữ liệu Bản đồ nhiệt...")
 
 # ==========================================
-# TAB 3: TOP 100 CỔ PHIẾU KHỐI LƯỢNG LỚN NHẤT
+# TAB 3: BẢNG ĐIỆN TOP 100 (TỰ ĐỘNG CẬP NHẬT)
 # ==========================================
 with tab3:
-    if not df_market.empty:
-        st.markdown("### 📊 Biến động 100 cổ phiếu có thanh khoản lớn nhất")
+    if not df_top100.empty:
+        st.markdown("### 📊 Biến động 100 cổ phiếu có thanh khoản lớn nhất hôm nay")
         
-        # Sắp xếp theo Khối lượng giảm dần và lấy Top 100
-        df_top100 = df_market.sort_values(by='Tổng KL', ascending=False).head(100)
-        
-        # Hàm tô màu xanh đỏ cho Dataframe
+        # Hàm tô màu
         def color_change(val):
             if pd.isna(val): return ''
             if val > 0: return 'color: #00e676; font-weight: bold;'
             elif val < 0: return 'color: #ff4d4d; font-weight: bold;'
-            else: return 'color: #f5b041; font-weight: bold;' # Màu vàng cho giá tham chiếu
+            else: return 'color: #f5b041; font-weight: bold;'
             
-        # Định dạng hiển thị số
         format_dict = {
             'Giá': '{:,.2f}',
             '+/-': '{:+,.2f}',
@@ -138,14 +147,11 @@ with tab3:
             'Tổng KL': '{:,.0f}'
         }
         
-        # Áp dụng định dạng và tô màu
-        # Dùng .applymap cho Pandas < 2.1, nếu lỗi bạn có thể đổi thành .map
         try:
             styled_df = df_top100.style.format(format_dict).map(color_change, subset=['+/-', '%'])
         except:
             styled_df = df_top100.style.format(format_dict).applymap(color_change, subset=['+/-', '%'])
         
-        # Hiển thị bảng
         st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
     else:
         st.info("⏳ Đang tải dữ liệu Bảng điện...")
