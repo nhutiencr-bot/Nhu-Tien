@@ -226,6 +226,52 @@ with tab2:
         fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=550)
         st.plotly_chart(fig, use_container_width=True)
         
-        # CHÚ THÍCH MÀU
-        st.markdown(f"""
-        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 5px; font-size: 14px; font-weight: 50
+        # CHÚ THÍCH MÀU ĐÃ ĐƯỢC CHIA NHỎ ĐỂ TRÁNH LỖI COPY
+        legend_html = (
+            '<div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 5px; font-size: 14px; font-weight: 500;">'
+            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_CEIL}; margin-right: 6px; border-radius: 3px;"></span> Tăng trần</div>'
+            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_GREEN}; margin-right: 6px; border-radius: 3px;"></span> Tăng</div>'
+            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_REF}; margin-right: 6px; border-radius: 3px;"></span> Tham chiếu</div>'
+            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_RED}; margin-right: 6px; border-radius: 3px;"></span> Giảm</div>'
+            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_DRED}; margin-right: 6px; border-radius: 3px;"></span> Giảm >3%</div>'
+            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_FLOOR}; margin-right: 6px; border-radius: 3px;"></span> Giảm sàn</div>'
+            '</div>'
+        )
+        st.markdown(legend_html, unsafe_allow_html=True)
+    else:
+        st.info("⏳ Đang tải dữ liệu Bản đồ nhiệt...")
+
+with tab3:
+    if not df_top100.empty:
+        def get_text_color(val):
+            if pd.isna(val): return ''
+            if val >= 6.8: return f'color: {COLOR_CEIL}; font-weight: bold;'
+            elif val <= -6.8: return f'color: {COLOR_FLOOR}; font-weight: bold;'
+            elif val > 0: return f'color: {COLOR_GREEN}; font-weight: bold;'
+            elif val == 0: return f'color: {COLOR_REF}; font-weight: bold;'
+            elif val > -3.0: return f'color: {COLOR_RED}; font-weight: bold;'
+            else: return f'color: {COLOR_DRED}; font-weight: bold;'
+            
+        format_dict = {
+            'Giá': '{:,.2f}', 
+            '+/-': '{:+,.2f}', 
+            '%': '{:+,.2f}%', 
+            'Tổng KL': '{:,.0f}'
+        }
+        
+        try:
+            styled_df = df_top100.style.format(format_dict).map(
+                get_text_color, subset=['+/-', '%']
+            )
+        except:
+            styled_df = df_top100.style.format(format_dict).applymap(
+                get_text_color, subset=['+/-', '%']
+            )
+            
+        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
+    else:
+        st.info("⏳ Đang tải dữ liệu Bảng điện...")
+
+if is_trading_hours:
+    time.sleep(60)
+    st.rerun()
