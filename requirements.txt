@@ -2,8 +2,5 @@ streamlit
 pandas
 vnstock
 vnstock3
-pytz
 plotly
-beautifulsoup4
 requests
-concurrent.futures
