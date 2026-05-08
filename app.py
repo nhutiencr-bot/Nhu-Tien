@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from vnstock import * # Import tất cả hàm từ bản mới nhất
+from vnstock import *
 from datetime import datetime, timedelta
 import pytz
 import time
@@ -20,7 +20,6 @@ end_date = now.strftime('%Y-%m-%d')
 start_stock = (now - timedelta(days=7)).strftime('%Y-%m-%d')
 start_index = (now - timedelta(days=5)).strftime('%Y-%m-%d')
 
-# Kiểm tra giờ giao dịch (9h00 - 15h30)
 is_trading = (now.weekday() < 5) and (
     (9 <= now.hour < 15) or (now.hour == 15 and now.minute <= 30)
 )
@@ -34,18 +33,23 @@ else:
 C_CEIL, C_GREEN, C_REF = '#cc00ff', '#00e676', '#f5b041'
 C_RED, C_DRED, C_FLOOR = '#ff4d4d', '#b30000', '#00e5ff'
 
+MAP_COLORS = [
+    [0.0, C_FLOOR], [0.014, C_FLOOR], [0.014, C_DRED], [0.285, C_DRED],
+    [0.285, C_RED], [0.499, C_RED], [0.499, C_REF], [0.501, C_REF],
+    [0.501, C_GREEN], [0.985, C_GREEN], [0.985, C_CEIL], [1.0, C_CEIL]
+]
+
 # 4. HÀM LẤY DỮ LIỆU
 @st.cache_data(ttl=86400)
-def get_hose_list():
+def get_hose_tickers():
     try:
-        # Lấy danh sách niêm yết mới nhất
         df = listing_companies()
         return df[df['comGroupCode'] == 'HOSE']['ticker'].tolist()
     except: return []
 
 @st.cache_data(ttl=300)
 def get_market_data():
-    tickers = get_hose_list()
+    tickers = get_hose_tickers()
     def fetch(t):
         try:
             d = stock_historical_data(t, start_stock, end_date, '1D', 'stock')
@@ -65,8 +69,7 @@ def get_market_data():
     return df.sort_values('Tổng KL', ascending=False).head(100) if not df.empty else df
 
 @st.cache_data(ttl=60)
-def get_index_contrib(df_top, ref_idx):
-    # Ưu tiên lấy API từ TCBS vì độ ổn định cao trên Streamlit
+def get_index_contrib():
     try:
         url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/intraday/index/ticker-contribute?index=VNINDEX"
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
@@ -76,7 +79,7 @@ def get_index_contrib(df_top, ref_idx):
     except: pass
     return pd.DataFrame()
 
-# 5. HIỂN THỊ GIAO DIỆN
+# 5. HIỂN THỊ
 df_100 = get_market_data()
 t1, t2, t3 = st.tabs(["📈 VN-INDEX", "🗺️ Bản đồ dòng tiền", "📊 Top 100 Active"])
 
@@ -106,7 +109,7 @@ with t1:
             
             with c2:
                 st.markdown("#### 🎯 Đóng góp điểm số")
-                df_c = get_index_contrib(df_100, ref)
+                df_c = get_index_contrib()
                 if not df_c.empty:
                     df_res = pd.concat([df_c[df_c['Điểm']>0].nlargest(10, 'Điểm'), 
                                        df_c[df_c['Điểm']<0].nsmallest(10, 'Điểm')]).sort_values('Điểm', ascending=False)
@@ -120,7 +123,8 @@ with t1:
 with t2:
     if not df_100.empty:
         fig_m = px.treemap(df_100, path=[px.Constant("Thị trường"), 'Mã CK'], values='Tổng KL', color='%', 
-                           color_continuous_scale=MAP_COLORS if 'MAP_COLORS' in locals() else 'RdYlGn', range_color=[-7, 7])
+                           color_continuous_scale=MAP_COLORS, range_color=[-7, 7])
+        fig_m.update_layout(height=600, margin=dict(t=0,l=0,r=0,b=0))
         st.plotly_chart(fig_m, use_container_width=True)
 
 with t3:
