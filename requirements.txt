@@ -1,6 +1,7 @@
 streamlit
 pandas
 vnstock==0.2.9.2.2
+vnstock3
 ipython
 pytz
 plotly
