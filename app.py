@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from vnstock import stock_historical_data, listing_companies
-from vnstock3 import Vnstock # Dùng vnstock3 để lấy số điểm chuẩn
+from vnstock3 import Vnstock 
 from datetime import datetime, timedelta
 import pytz
 import time
@@ -47,13 +47,26 @@ def get_dynamic_top_100():
     
     def fetch_ticker(ticker):
         try:
-            df = stock_historical_data(symbol=ticker, start_date=start_date_stock, end_date=end_date, resolution='1D', type='stock')
+            df = stock_historical_data(
+                symbol=ticker, 
+                start_date=start_date_stock, 
+                end_date=end_date, 
+                resolution='1D', 
+                type='stock'
+            )
             if len(df) >= 2:
                 close_today = df.iloc[-1]['close']
                 close_yest = df.iloc[-2]['close']
                 change = close_today - close_yest
                 pct_change = (change / close_yest) * 100
-                return {'Mã CK': ticker, 'Nhóm Ngành': sector_dict.get(ticker, 'Khác'), 'Giá': close_today, '+/-': round(change, 2), '%': round(pct_change, 2), 'Tổng KL': int(df.iloc[-1]['volume'])}
+                return {
+                    'Mã CK': ticker, 
+                    'Nhóm Ngành': sector_dict.get(ticker, 'Khác'), 
+                    'Giá': close_today, 
+                    '+/-': round(change, 2), 
+                    '%': round(pct_change, 2), 
+                    'Tổng KL': int(df.iloc[-1]['volume'])
+                }
         except:
             return None
 
@@ -65,10 +78,10 @@ def get_dynamic_top_100():
             if res and res['Tổng KL'] > 0: results.append(res)
                 
     df_market = pd.DataFrame(results)
-    if not df_market.empty: return df_market.sort_values(by='Tổng KL', ascending=False).head(100)
+    if not df_market.empty: 
+        return df_market.sort_values(by='Tổng KL', ascending=False).head(100)
     return df_market
 
-# HÀM LẤY ĐÓNG GÓP ĐIỂM SỐ CHUẨN XÁC TỪ VNSTOCK3
 @st.cache_data(ttl=60)
 def get_exact_contribution():
     try:
@@ -78,7 +91,7 @@ def get_exact_contribution():
     except Exception as e:
         return pd.DataFrame()
 
-# MÀU SẮC CHUẨN SSI/FIREANT
+# MÀU SẮC CHUẨN
 COLOR_CEIL = '#cc00ff'
 COLOR_GREEN = '#00e676'
 COLOR_REF = '#f5b041'
@@ -120,11 +133,14 @@ with tab1:
                 point_change = current_score - ref_price
                 pct_change = (point_change / ref_price) * 100
                 
-                st.metric(label=f"VN-INDEX (Lúc: {df_today.iloc[-1]['time']})", value=f"{current_score:,.2f}", delta=f"{point_change:+,.2f} điểm ({pct_change:+,.2f}%)")
+                st.metric(
+                    label=f"VN-INDEX (Lúc: {df_today.iloc[-1]['time']})", 
+                    value=f"{current_score:,.2f}", 
+                    delta=f"{point_change:+,.2f} điểm ({pct_change:+,.2f}%)"
+                )
                 
                 col1, col2 = st.columns(2)
                 
-                # --- BIỂU ĐỒ THANH KHOẢN ---
                 with col1:
                     st.markdown("#### 🌊 Thanh khoản (Hôm nay vs Hôm qua)")
                     df_today['time_str'] = pd.to_datetime(df_today['time']).dt.strftime('%H:%M')
@@ -133,31 +149,39 @@ with tab1:
                     df_yest['cum_vol'] = df_yest['volume'].cumsum()
                     
                     fig_liq = go.Figure()
-                    fig_liq.add_trace(go.Scatter(x=df_yest['time_str'], y=df_yest['cum_vol'], fill='tozeroy', mode='lines', name='Hôm qua', line=dict(color='rgba(65, 105, 225, 0.6)', width=2), fillcolor='rgba(65, 105, 225, 0.1)'))
-                    fig_liq.add_trace(go.Scatter(x=df_today['time_str'], y=df_today['cum_vol'], fill='tozeroy', mode='lines', name='Hôm nay', line=dict(color='rgba(154, 205, 50, 0.9)', width=2), fillcolor='rgba(154, 205, 50, 0.5)'))
-                    fig_liq.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=350, hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                    fig_liq.add_trace(go.Scatter(
+                        x=df_yest['time_str'], y=df_yest['cum_vol'], 
+                        fill='tozeroy', mode='lines', name='Hôm qua', 
+                        line=dict(color='rgba(65, 105, 225, 0.6)', width=2), 
+                        fillcolor='rgba(65, 105, 225, 0.1)'
+                    ))
+                    fig_liq.add_trace(go.Scatter(
+                        x=df_today['time_str'], y=df_today['cum_vol'], 
+                        fill='tozeroy', mode='lines', name='Hôm nay', 
+                        line=dict(color='rgba(154, 205, 50, 0.9)', width=2), 
+                        fillcolor='rgba(154, 205, 50, 0.5)'
+                    ))
+                    fig_liq.update_layout(
+                        margin=dict(l=10, r=10, t=10, b=10), 
+                        height=350, hovermode="x unified", 
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
                     st.plotly_chart(fig_liq, use_container_width=True)
 
-                # --- BIỂU ĐỒ CỘT DỌC ĐÓNG GÓP ĐIỂM SỐ (CHUẨN FIREANT) ---
                 with col2:
                     st.markdown("#### 🎯 Tác động tới VN-INDEX (Điểm thực tế)")
                     df_contrib = get_exact_contribution()
                     
                     if not df_contrib.empty:
-                        # Tự động tìm cột chứa Mã CK (chữ) và cột chứa Điểm (số)
                         str_cols = [c for c in df_contrib.columns if df_contrib[c].dtype == 'object']
                         num_cols = [c for c in df_contrib.columns if df_contrib[c].dtype != 'object']
                         
                         if str_cols and num_cols:
                             t_col, v_col = str_cols[0], num_cols[0]
-                            
-                            # Tách 10 mã kéo và 10 mã đè điểm
                             top_pos = df_contrib[df_contrib[v_col] > 0].sort_values(by=v_col, ascending=False).head(10)
                             top_neg = df_contrib[df_contrib[v_col] < 0].sort_values(by=v_col, ascending=True).head(10)
                             
-                            # Gộp lại và sắp xếp để hiển thị từ cao xuống thấp (Xanh bên trái, Đỏ bên phải)
                             df_impact = pd.concat([top_pos, top_neg]).sort_values(by=v_col, ascending=False)
-                            
                             bar_colors = [COLOR_GREEN if val > 0 else COLOR_RED for val in df_impact[v_col]]
                             
                             fig_bar = go.Figure(go.Bar(
@@ -185,35 +209,23 @@ with tab1:
 # ==========================================
 with tab2:
     if not df_top100.empty:
-        fig = px.treemap(df_top100, path=[px.Constant("Thị trường"), 'Nhóm Ngành', 'Mã CK'], values='Tổng KL', color='%', color_continuous_scale=custom_color_scale, range_color=[-7, 7], custom_data=['%', 'Tổng KL', 'Giá'])
-        fig.update_traces(texttemplate="<b>%{label}</b><br>%{customdata[0]:+.2f}%<br>KL: %{customdata[1]:,.0f}", textposition="middle center", textfont=dict(color="white", size=13))
+        fig = px.treemap(
+            df_top100, 
+            path=[px.Constant("Thị trường"), 'Nhóm Ngành', 'Mã CK'], 
+            values='Tổng KL', 
+            color='%', 
+            color_continuous_scale=custom_color_scale, 
+            range_color=[-7, 7], 
+            custom_data=['%', 'Tổng KL', 'Giá']
+        )
+        fig.update_traces(
+            texttemplate="<b>%{label}</b><br>%{customdata[0]:+.2f}%<br>KL: %{customdata[1]:,.0f}", 
+            textposition="middle center", 
+            textfont=dict(color="white", size=13)
+        )
         fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=550)
         st.plotly_chart(fig, use_container_width=True)
         
-        # CHÚ THÍCH MÀU (LEGEND)
+        # CHÚ THÍCH MÀU
         st.markdown(f"""
-        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 5px; font-size: 14px; font-weight: 500;">
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_CEIL}; margin-right: 6px; border-radius: 3px;"></span> Tăng trần</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_GREEN}; margin-right: 6px; border-radius: 3px;"></span> Tăng</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_REF}; margin-right: 6px; border-radius: 3px;"></span> Tham chiếu</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_RED}; margin-right: 6px; border-radius: 3px;"></span> Giảm</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_DRED}; margin-right: 6px; border-radius: 3px;"></span> Giảm >3%</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_FLOOR}; margin-right: 6px; border-radius: 3px;"></span> Giảm sàn</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.info("⏳ Đang tải dữ liệu Bản đồ nhiệt...")
-
-with tab3:
-    if not df_top100.empty:
-        def get_text_color(val):
-            if pd.isna(val): return ''
-            if val >= 6.8: return f'color: {COLOR_CEIL}; font-weight: bold;'
-            elif val <= -6.8: return f'color: {COLOR_FLOOR}; font-weight: bold;'
-            elif val > 0: return f'color: {COLOR_GREEN}; font-weight: bold;'
-            elif val == 0: return f'color: {COLOR_REF}; font-weight: bold;'
-            elif val > -3.0: return f'color: {COLOR_RED}; font-weight: bold;'
-            else: return f'color: {COLOR_DRED}; font-weight: bold;'
-            
-        try:
-            styled_df = df_top100.style.format({'Giá': '{:,.2f}', '+/-': '{:+,.2f}', '%': '{:+,.2f}%', 'Tổng KL': '{:,.0f}'}).map(get_text
+        <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 5px; font-size: 14px; font-weight: 50
