@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from vnstock import stock_historical_data, listing_companies
+# Cập nhật: Thêm hàm ticker_overview để lấy Số lượng cổ phiếu lưu hành
+from vnstock import stock_historical_data, listing_companies, ticker_overview
 from datetime import datetime, timedelta
 import pytz
 import time
@@ -13,7 +14,7 @@ import requests
 st.set_page_config(page_title="Fairy Invest", page_icon="🧚‍♀️", layout="wide")
 st.title("🧚‍♀️ FAIRY INVEST - Dashboard Chứng Khoán")
 
-# 2. THIẾT LẬP THỜI GIAN VÀ KHUNG GIỜ GIAO DỊCH
+# 2. THIẾT LẬP THỜI GIAN VÀ KHUNG GIỜ
 vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 current_time = datetime.now(vn_tz)
 end_date = current_time.strftime('%Y-%m-%d')
@@ -47,13 +48,7 @@ def get_dynamic_top_100():
     
     def fetch_ticker(ticker):
         try:
-            df = stock_historical_data(
-                symbol=ticker, 
-                start_date=start_date_stock, 
-                end_date=end_date, 
-                resolution='1D', 
-                type='stock'
-            )
+            df = stock_historical_data(symbol=ticker, start_date=start_date_stock, end_date=end_date, resolution='1D', type='stock')
             if len(df) >= 2:
                 close_today = df.iloc[-1]['close']
                 close_yest = df.iloc[-2]['close']
@@ -82,13 +77,32 @@ def get_dynamic_top_100():
         return df_market.sort_values(by='Tổng KL', ascending=False).head(100)
     return df_market
 
-# HÀM LẤY ĐÓNG GÓP ĐIỂM SỐ (DÙNG API TCBS - MƯỢT MÀ KHÔNG BỊ CHẶN)
+# HÀM LẤY SỐ LƯỢNG CỔ PHIẾU LƯU HÀNH (Chỉ chạy 1 lần/ngày)
+@st.cache_data(ttl=86400)
+def get_outstanding_shares(tickers):
+    shares_dict = {}
+    def fetch_shares(ticker):
+        try:
+            df = ticker_overview(ticker)
+            # Lấy số lượng CP lưu hành (triệu CP)
+            return ticker, df['outstandingShare'].iloc[0] 
+        except:
+            return ticker, 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(fetch_shares, t) for t in tickers]
+        for future in concurrent.futures.as_completed(futures):
+            t, s = future.result()
+            if s > 0: shares_dict[t] = s
+    return shares_dict
+
+# HÀM LẤY ĐÓNG GÓP ĐIỂM SỐ (CHUẨN VỐN HÓA 100%)
 @st.cache_data(ttl=60)
-def get_exact_contribution(df_top):
-    # Lớp 1: Gọi API của TCBS
+def get_exact_contribution(df_top, vnindex_ref_price):
+    # Lớp 1: Gọi API của TCBS (Số chuẩn Sở GDCK)
     try:
         url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/intraday/index/ticker-contribute?index=VNINDEX"
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=5)
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         if res.status_code == 200:
             data = res.json()
             if 'data' in data and len(data['data']) > 0:
@@ -97,7 +111,7 @@ def get_exact_contribution(df_top):
     except:
         pass
 
-    # Lớp 2: Dùng vnstock3
+    # Lớp 2: Dùng vnstock3 (Số chuẩn Sở GDCK)
     try:
         from vnstock3 import Vnstock
         vn = Vnstock()
@@ -110,12 +124,29 @@ def get_exact_contribution(df_top):
     except:
         pass
 
-    # Lớp 3: Mô phỏng dựa trên Top 100
-    if not df_top.empty:
+    # Lớp 3: TỰ TÍNH TOÁN CHUẨN XÁC DỰA TRÊN VỐN HÓA (Dự phòng cực mạnh)
+    if not df_top.empty and vnindex_ref_price > 0:
         df_sim = df_top.copy()
-        weights = {'VCB': 4.5, 'BID': 3.0, 'VIC': 2.5, 'VHM': 2.5, 'CTG': 2.0, 'TCB': 2.0, 'FPT': 1.8, 'HPG': 1.5, 'GAS': 1.5}
-        df_sim['Weight'] = df_sim['Mã CK'].map(lambda x: weights.get(x, 0.5))
-        df_sim['Điểm'] = (df_sim['%'] * df_sim['Weight']) / 3.0
+        
+        # 1. Kéo Khối lượng lưu hành thực tế
+        shares = get_outstanding_shares(df_sim['Mã CK'].tolist())
+        df_sim['KL_Luu_Hanh'] = df_sim['Mã CK'].map(shares).fillna(0)
+        
+        # 2. Tính Giá tham chiếu của từng mã (Giá hiện tại - Mức thay đổi)
+        df_sim['Gia_Tham_Chieu'] = df_sim['Giá'] - df_sim['+/-']
+        
+        # 3. Tính Vốn hóa (Market Cap) = Giá tham chiếu x KL Lưu hành
+        df_sim['Von_Hoa'] = df_sim['Gia_Tham_Chieu'] * df_sim['KL_Luu_Hanh']
+        
+        # 4. Giả định Top 100 chiếm khoảng 85% tổng vốn hóa sàn HOSE
+        total_market_cap_estimate = df_sim['Von_Hoa'].sum() / 0.85 
+        
+        # 5. Tính Tỷ trọng vốn hóa (Weight)
+        df_sim['Ty_Trong'] = df_sim['Von_Hoa'] / total_market_cap_estimate
+        
+        # 6. TÍNH ĐIỂM ĐÓNG GÓP: Điểm Index Cũ x Tỷ Trọng x % Thay đổi
+        df_sim['Điểm'] = vnindex_ref_price * df_sim['Ty_Trong'] * (df_sim['%'] / 100)
+        
         return df_sim[['Mã CK', 'Điểm']]
 
     return pd.DataFrame()
@@ -149,6 +180,8 @@ with tab1:
 
     try:
         df_index = get_realtime_index()
+        ref_price_index = 1250 # Giá trị dự phòng nếu lỗi
+        
         if not df_index.empty:
             df_index['date'] = pd.to_datetime(df_index['time']).dt.date
             unique_dates = df_index['date'].unique()
@@ -158,9 +191,9 @@ with tab1:
                 df_yest = df_index[df_index['date'] == unique_dates[-2]].copy()
                 
                 current_score = df_today.iloc[-1]['close']
-                ref_price = df_yest.iloc[-1]['close']
-                point_change = current_score - ref_price
-                pct_change = (point_change / ref_price) * 100
+                ref_price_index = df_yest.iloc[-1]['close'] # Lấy điểm tham chiếu thực tế
+                point_change = current_score - ref_price_index
+                pct_change = (point_change / ref_price_index) * 100
                 
                 st.metric(
                     label=f"VN-INDEX (Lúc: {df_today.iloc[-1]['time']})", 
@@ -198,108 +231,13 @@ with tab1:
                     st.plotly_chart(fig_liq, use_container_width=True)
 
                 with col2:
-                    st.markdown("#### 🎯 Tác động tới VN-INDEX")
-                    df_contrib = get_exact_contribution(df_top100)
+                    st.markdown("#### 🎯 Tác động tới VN-INDEX (Chuẩn Vốn Hóa)")
+                    # Tính năng Truyền điểm VN-INDEX hôm qua vào để tự tính chuẩn xác
+                    df_contrib = get_exact_contribution(df_top100, ref_price_index)
                     
                     if not df_contrib.empty:
                         top_pos = df_contrib[df_contrib['Điểm'] > 0].sort_values(by='Điểm', ascending=False).head(10)
                         top_neg = df_contrib[df_contrib['Điểm'] < 0].sort_values(by='Điểm', ascending=True).head(10)
                         
                         df_impact = pd.concat([top_pos, top_neg]).sort_values(by='Điểm', ascending=False)
-                        bar_colors = [COLOR_GREEN if val > 0 else COLOR_RED for val in df_impact['Điểm']]
-                        
-                        fig_bar = go.Figure(go.Bar(
-                            x=df_impact['Mã CK'], 
-                            y=df_impact['Điểm'],
-                            marker_color=bar_colors,
-                            text=df_impact['Điểm'].apply(lambda x: f"{x:+.2f}"),
-                            textposition='outside'
-                        ))
-                        
-                        fig_bar.add_hline(y=0, line_width=1, line_color="gray")
-                        
-                        fig_bar.update_layout(
-                            margin=dict(l=10, r=10, t=20, b=10), 
-                            height=350, 
-                            yaxis_title="Điểm đóng góp",
-                            xaxis_title="",
-                            plot_bgcolor='rgba(0,0,0,0)'
-                        )
-                        st.plotly_chart(fig_bar, use_container_width=True)
-                    else:
-                        st.info("Đang tải dữ liệu điểm số đóng góp...")
-
-    except Exception as e:
-        st.error("Đang chờ dữ liệu VN-INDEX...")
-
-# ==========================================
-# TAB 2 & 3: HEATMAP VÀ TOP 100 
-# ==========================================
-with tab2:
-    if not df_top100.empty:
-        fig = px.treemap(
-            df_top100, 
-            path=[px.Constant("Thị trường"), 'Nhóm Ngành', 'Mã CK'], 
-            values='Tổng KL', 
-            color='%', 
-            color_continuous_scale=custom_color_scale, 
-            range_color=[-7, 7], 
-            custom_data=['%', 'Tổng KL', 'Giá']
-        )
-        fig.update_traces(
-            texttemplate="<b>%{label}</b><br>%{customdata[0]:+.2f}%<br>KL: %{customdata[1]:,.0f}", 
-            textposition="middle center", 
-            textfont=dict(color="white", size=13)
-        )
-        fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=550)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # CHÚ THÍCH MÀU ĐƯỢC CHIA DÒNG AN TOÀN
-        legend_html = (
-            '<div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 5px; font-size: 14px; font-weight: 500;">'
-            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_CEIL}; margin-right: 6px; border-radius: 3px;"></span> Tăng trần</div>'
-            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_GREEN}; margin-right: 6px; border-radius: 3px;"></span> Tăng</div>'
-            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_REF}; margin-right: 6px; border-radius: 3px;"></span> Tham chiếu</div>'
-            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_RED}; margin-right: 6px; border-radius: 3px;"></span> Giảm</div>'
-            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_DRED}; margin-right: 6px; border-radius: 3px;"></span> Giảm >3%</div>'
-            f'<div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_FLOOR}; margin-right: 6px; border-radius: 3px;"></span> Giảm sàn</div>'
-            '</div>'
-        )
-        st.markdown(legend_html, unsafe_allow_html=True)
-    else:
-        st.info("⏳ Đang tải dữ liệu Bản đồ nhiệt...")
-
-with tab3:
-    if not df_top100.empty:
-        def get_text_color(val):
-            if pd.isna(val): return ''
-            if val >= 6.8: return f'color: {COLOR_CEIL}; font-weight: bold;'
-            elif val <= -6.8: return f'color: {COLOR_FLOOR}; font-weight: bold;'
-            elif val > 0: return f'color: {COLOR_GREEN}; font-weight: bold;'
-            elif val == 0: return f'color: {COLOR_REF}; font-weight: bold;'
-            elif val > -3.0: return f'color: {COLOR_RED}; font-weight: bold;'
-            else: return f'color: {COLOR_DRED}; font-weight: bold;'
-            
-        format_dict = {
-            'Giá': '{:,.2f}', 
-            '+/-': '{:+,.2f}', 
-            '%': '{:+,.2f}%', 
-            'Tổng KL': '{:,.0f}'
-        }
-        
-        try:
-            styled_df = df_top100.style.format(format_dict).map(
-                get_text_color, subset=['+/-', '%']
-            )
-        except:
-            styled_df = df_top100.style.format(format_dict).applymap(
-                get_text_color, subset=['+/-', '%']
-            )
-            
-        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
-    else:
-        st.info("⏳ Đang tải dữ liệu Bảng điện...")
-
-if is_trading_hours:
-    time.sleep(60)
-    st.rerun()
+                        bar_colors = [COLOR
