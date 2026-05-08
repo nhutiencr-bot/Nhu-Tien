@@ -12,24 +12,26 @@ import concurrent.futures
 st.set_page_config(page_title="Fairy Invest", page_icon="🧚‍♀️", layout="wide")
 st.title("🧚‍♀️ FAIRY INVEST - Dashboard Chứng Khoán")
 
-# 2. THIẾT LẬP THỜI GIAN VÀ KHUNG GIỜ GIAO DỊCH
+# 2. THIẾT LẬP THỜI GIAN VÀ KHUNG GIỜ GIAO DỊCH (9h00 - 15h30)
 vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 current_time = datetime.now(vn_tz)
 end_date = current_time.strftime('%Y-%m-%d')
 start_date_stock = (current_time - timedelta(days=7)).strftime('%Y-%m-%d')
 start_date_index = (current_time - timedelta(days=5)).strftime('%Y-%m-%d')
 
-# Kiểm tra xem có đang trong giờ giao dịch không (9h00 - 15h30, Thứ 2 đến Thứ 6)
 is_weekday = current_time.weekday() < 5
 current_hour = current_time.hour
 current_minute = current_time.minute
-is_trading_hours = is_weekday and ((9 <= current_hour <= 14) or (current_hour == 15 and current_minute <= 30) or (current_hour == 8 and current_minute >= 50))
+# Điều kiện: Từ 9h đến 14h59, HOẶC đúng 15h nhưng phút <= 30
+is_trading_hours = is_weekday and (
+    (9 <= current_hour < 15) or 
+    (current_hour == 15 and current_minute <= 30)
+)
 
-# Hiển thị trạng thái thị trường ở thanh bên (Sidebar)
 if is_trading_hours:
-    st.sidebar.success(f"🟢 Thị trường đang MỞ CỬA\n\nCập nhật lúc: {current_time.strftime('%H:%M:%S')}")
+    st.sidebar.success(f"🟢 Thị trường ĐANG GIAO DỊCH\n\nCập nhật: {current_time.strftime('%H:%M:%S')}")
 else:
-    st.sidebar.warning(f"🔴 Thị trường ĐÃ ĐÓNG CỬA\n\nDữ liệu chốt phiên ngày {end_date}")
+    st.sidebar.warning(f"🔴 Thị trường ĐÃ ĐÓNG CỬA\n\nChốt phiên: {end_date}")
 
 # 3. HÀM QUÉT TOÀN THỊ TRƯỜNG VÀ TÌM TOP 100 
 @st.cache_data(ttl=86400)
@@ -98,7 +100,6 @@ custom_color_scale = [
     [0.985, COLOR_CEIL], [1.0, COLOR_CEIL]
 ]
 
-# TẢI DỮ LIỆU TOP 100
 df_top100 = get_dynamic_top_100()
 
 # 4. TẠO GIAO DIỆN 3 TABS
@@ -114,7 +115,6 @@ with tab1:
 
     try:
         df_index = get_realtime_index()
-        
         if not df_index.empty:
             df_index['date'] = pd.to_datetime(df_index['time']).dt.date
             unique_dates = df_index['date'].unique()
@@ -133,10 +133,8 @@ with tab1:
                 point_change = current_score - ref_price
                 pct_change = (point_change / ref_price) * 100
                 
-                # CHỈ SỐ VN-INDEX
                 st.metric(label=f"VN-INDEX (Lúc: {latest_time})", value=f"{current_score:,.2f}", delta=f"{point_change:+,.2f} điểm ({pct_change:+,.2f}%)")
                 
-                # CHIA 2 CỘT: THANH KHOẢN & TÁC ĐỘNG
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -153,26 +151,36 @@ with tab1:
                     st.plotly_chart(fig_liq, use_container_width=True)
 
                 with col2:
-                    st.markdown("#### 🚀 Cổ phiếu biến động mạnh (Nhóm Top 100)")
+                    st.markdown("#### 🎯 Tác động tới VN-INDEX (Mô phỏng)")
                     if not df_top100.empty:
-                        # Mô phỏng sức ảnh hưởng = % x KL
-                        df_top100['Impact'] = df_top100['%'] * df_top100['Tổng KL']
-                        top_pos = df_top100[df_top100['%'] > 0].sort_values('Impact', ascending=False).head(10)
-                        top_neg = df_top100[df_top100['%'] < 0].sort_values('Impact', ascending=True).head(10)
-                        df_impact = pd.concat([top_neg, top_pos]).sort_values('%', ascending=True)
+                        # Tính toán điểm tác động mô phỏng
+                        # Chia cho 1 hằng số để dải số rơi vào khoảng 0.5 - 5.0 giống điểm index thật
+                        df_top100['Impact'] = (df_top100['%'] * df_top100['Tổng KL']) / 3000000 
                         
-                        bar_colors = [COLOR_RED if val < 0 else COLOR_GREEN for val in df_impact['%']]
+                        top_pos = df_top100[df_top100['Impact'] > 0].sort_values('Impact', ascending=False).head(10)
+                        top_neg = df_top100[df_top100['Impact'] < 0].sort_values('Impact', ascending=True).head(10)
                         
+                        # Gộp lại và sắp xếp giảm dần để Cột Xanh nằm trái, Cột Đỏ nằm phải
+                        df_impact = pd.concat([top_pos, top_neg]).sort_values('Impact', ascending=False)
+                        
+                        bar_colors = [COLOR_GREEN if val > 0 else COLOR_RED for val in df_impact['Impact']]
+                        
+                        # Vẽ biểu đồ cột dọc (Vertical Bar)
                         fig_bar = go.Figure(go.Bar(
-                            x=df_impact['%'], y=df_impact['Mã CK'], orientation='h',
+                            x=df_impact['Mã CK'], 
+                            y=df_impact['Impact'],
                             marker_color=bar_colors,
-                            text=df_impact['%'].apply(lambda x: f"{x:+.2f}%"),
-                            textposition='outside'
+                            text=df_impact['Impact'].apply(lambda x: f"{x:+.2f}"),
+                            textposition='auto'
                         ))
-                        fig_bar.update_layout(margin=dict(l=10, r=30, t=10, b=10), height=350, xaxis_title="% Thay đổi")
+                        fig_bar.update_layout(
+                            margin=dict(l=10, r=10, t=30, b=10), 
+                            height=350, 
+                            yaxis_title="Điểm mô phỏng"
+                        )
                         st.plotly_chart(fig_bar, use_container_width=True)
                     else:
-                        st.info("Đang tải dữ liệu cổ phiếu...")
+                        st.info("Đang tải dữ liệu...")
 
     except Exception as e:
         st.error("Đang chờ dữ liệu VN-INDEX...")
@@ -192,15 +200,15 @@ with tab2:
         fig.update_layout(margin=dict(t=10, l=10, r=10, b=10), height=550)
         st.plotly_chart(fig, use_container_width=True)
         
-        # CHÚ THÍCH MÀU SẮC (LEGEND) HTML
+        # CHÚ THÍCH MÀU SẮC (CÓ Ô MÀU VUÔNG BÊN CẠNH CHỮ)
         legend_html = f"""
         <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 5px; font-size: 14px; font-weight: 500;">
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 20px; height: 20px; background-color: {COLOR_CEIL}; margin-right: 8px; border-radius: 4px; border: 1px solid #ddd;"></span> Tăng trần</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 20px; height: 20px; background-color: {COLOR_GREEN}; margin-right: 8px; border-radius: 4px; border: 1px solid #ddd;"></span> Tăng</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 20px; height: 20px; background-color: {COLOR_REF}; margin-right: 8px; border-radius: 4px; border: 1px solid #ddd;"></span> Tham chiếu</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 20px; height: 20px; background-color: {COLOR_RED}; margin-right: 8px; border-radius: 4px; border: 1px solid #ddd;"></span> Giảm</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 20px; height: 20px; background-color: {COLOR_DRED}; margin-right: 8px; border-radius: 4px; border: 1px solid #ddd;"></span> Giảm >3%</div>
-            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 20px; height: 20px; background-color: {COLOR_FLOOR}; margin-right: 8px; border-radius: 4px; border: 1px solid #ddd;"></span> Giảm sàn</div>
+            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_CEIL}; margin-right: 6px; border-radius: 3px;"></span> Tăng trần</div>
+            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_GREEN}; margin-right: 6px; border-radius: 3px;"></span> Tăng</div>
+            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_REF}; margin-right: 6px; border-radius: 3px;"></span> Tham chiếu</div>
+            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_RED}; margin-right: 6px; border-radius: 3px;"></span> Giảm</div>
+            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_DRED}; margin-right: 6px; border-radius: 3px;"></span> Giảm >3%</div>
+            <div style="display: flex; align-items: center;"><span style="display: inline-block; width: 18px; height: 18px; background-color: {COLOR_FLOOR}; margin-right: 6px; border-radius: 3px;"></span> Giảm sàn</div>
         </div>
         """
         st.markdown(legend_html, unsafe_allow_html=True)
