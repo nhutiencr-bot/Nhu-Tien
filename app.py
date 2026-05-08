@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytz
 import time
 import plotly.express as px
-import plotly.graph_objects as go # Thêm thư viện vẽ biểu đồ thanh khoản
+import plotly.graph_objects as go
 import concurrent.futures
 
 # 1. CÀI ĐẶT GIAO DIỆN
@@ -17,7 +17,6 @@ vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 current_time = datetime.now(vn_tz)
 end_date = current_time.strftime('%Y-%m-%d')
 start_date_stock = (current_time - timedelta(days=7)).strftime('%Y-%m-%d')
-# Lấy lùi 5 ngày cho Index để chắc chắn có dữ liệu của ngày hôm qua và hôm nay
 start_date_index = (current_time - timedelta(days=5)).strftime('%Y-%m-%d')
 
 # 3. HÀM QUÉT TOÀN THỊ TRƯỜNG VÀ TÌM TOP 100 
@@ -77,14 +76,12 @@ tab1, tab2, tab3 = st.tabs(["📈 VN-INDEX", "🗺️ Bản đồ dòng tiền",
 with tab1:
     @st.cache_data(ttl=60)
     def get_realtime_index():
-        # Lấy dữ liệu theo từng phút
         return stock_historical_data(symbol='VNINDEX', start_date=start_date_index, end_date=end_date, resolution='1', type='index')
 
     try:
         df_index = get_realtime_index()
         
         if not df_index.empty:
-            # Tách ngày để lấy Hôm nay và Hôm qua
             df_index['date'] = pd.to_datetime(df_index['time']).dt.date
             unique_dates = df_index['date'].unique()
             
@@ -98,7 +95,7 @@ with tab1:
                 # --- XỬ LÝ CHỈ SỐ ĐIỂM ---
                 current_score = df_today.iloc[-1]['close']
                 latest_time = df_today.iloc[-1]['time']
-                ref_price = df_yest.iloc[-1]['close'] # Giá tham chiếu = Đóng cửa hôm qua
+                ref_price = df_yest.iloc[-1]['close']
                 
                 point_change = current_score - ref_price
                 pct_change = (point_change / ref_price) * 100
@@ -106,7 +103,7 @@ with tab1:
                 st.metric(
                     label=f"VN-INDEX (Cập nhật lúc: {latest_time})", 
                     value=f"{current_score:,.2f}", 
-                    delta=f"{point_change:+,.2f} điểm ({pct_change:+,.2f}%)" # Dấu + sẽ tự động hiện nếu điểm dương
+                    delta=f"{point_change:+,.2f} điểm ({pct_change:+,.2f}%)"
                 )
                 
                 st.divider()
@@ -114,17 +111,14 @@ with tab1:
                 # --- VẼ BIỂU ĐỒ THANH KHOẢN SO SÁNH ---
                 st.markdown("### 🌊 Biểu đồ Thanh khoản (Hôm nay vs Hôm qua)")
                 
-                # Chuyển đổi thời gian thành chuỗi Giờ:Phút để hai đường có thể khớp lên cùng 1 trục X
                 df_today['time_str'] = pd.to_datetime(df_today['time']).dt.strftime('%H:%M')
                 df_yest['time_str'] = pd.to_datetime(df_yest['time']).dt.strftime('%H:%M')
                 
-                # Tính Khối lượng cộng dồn từ sáng đến chiều
                 df_today['cum_vol'] = df_today['volume'].cumsum()
                 df_yest['cum_vol'] = df_yest['volume'].cumsum()
                 
                 fig_liq = go.Figure()
                 
-                # Đường Thanh khoản Hôm qua (Nền xanh nhạt, đường viền xanh dương)
                 fig_liq.add_trace(go.Scatter(
                     x=df_yest['time_str'], y=df_yest['cum_vol'],
                     fill='tozeroy', mode='lines',
@@ -133,7 +127,6 @@ with tab1:
                     fillcolor='rgba(65, 105, 225, 0.1)'
                 ))
                 
-                # Đường Thanh khoản Hôm nay (Nền xanh lá mạ)
                 fig_liq.add_trace(go.Scatter(
                     x=df_today['time_str'], y=df_today['cum_vol'],
                     fill='tozeroy', mode='lines',
@@ -145,18 +138,17 @@ with tab1:
                 fig_liq.update_layout(
                     margin=dict(l=10, r=10, t=30, b=10),
                     height=450,
-                    hovermode="x unified", # Trỏ chuột vào sẽ hiện ra thông số của cả 2 ngày
+                    hovermode="x unified",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
                 
                 st.plotly_chart(fig_liq, use_container_width=True)
                 
-                # --- BIỂU ĐỒ ĐIỂM SỐ TRONG NGÀY ---
                 with st.expander("Xem biểu đồ điểm số VN-INDEX trong ngày"):
                     st.line_chart(df_today[['time_str', 'close']].set_index('time_str'))
 
     except Exception as e:
-        st.error(f"Đang chờ dữ liệu VN-INDEX...")
+        st.error("Đang chờ dữ liệu VN-INDEX...")
 
 # TẢI DỮ LIỆU TOP 100 CHUNG CHO TAB 2 & 3
 df_top100 = get_dynamic_top_100()
@@ -171,4 +163,49 @@ with tab2:
             path=[px.Constant("Thị trường"), 'Nhóm Ngành', 'Mã CK'], 
             values='Tổng KL', 
             color='%', 
-            color_continuous_scale=['#ff4d4d
+            color_continuous_scale=['#ff4d4d', '#2b2b2b', '#00e676'], 
+            color_continuous_midpoint=0,
+            custom_data=['%', 'Tổng KL', 'Giá']
+        )
+        fig.update_traces(
+            texttemplate="<b>%{label}</b><br>%{customdata[0]:+.2f}%<br>KL: %{customdata[1]:,.0f}",
+            textposition="middle center",
+            textfont=dict(color="white", size=13)
+        )
+        fig.update_layout(margin=dict(t=20, l=10, r=10, b=10), height=650)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("⏳ Đang tải dữ liệu Bản đồ nhiệt...")
+
+# ==========================================
+# TAB 3: BẢNG ĐIỆN TOP 100 (TỰ ĐỘNG CẬP NHẬT)
+# ==========================================
+with tab3:
+    if not df_top100.empty:
+        st.markdown("### 📊 Biến động 100 cổ phiếu có thanh khoản lớn nhất hôm nay")
+        
+        def color_change(val):
+            if pd.isna(val): return ''
+            if val > 0: return 'color: #00e676; font-weight: bold;'
+            elif val < 0: return 'color: #ff4d4d; font-weight: bold;'
+            else: return 'color: #f5b041; font-weight: bold;'
+            
+        format_dict = {
+            'Giá': '{:,.2f}',
+            '+/-': '{:+,.2f}',
+            '%': '{:+,.2f}%',
+            'Tổng KL': '{:,.0f}'
+        }
+        
+        try:
+            styled_df = df_top100.style.format(format_dict).map(color_change, subset=['+/-', '%'])
+        except:
+            styled_df = df_top100.style.format(format_dict).applymap(color_change, subset=['+/-', '%'])
+        
+        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=600)
+    else:
+        st.info("⏳ Đang tải dữ liệu Bảng điện...")
+
+# Tự động làm mới trang sau 60 giây
+time.sleep(60)
+st.rerun()
