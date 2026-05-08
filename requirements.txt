@@ -6,3 +6,4 @@ ipython
 pytz
 plotly
 beautifulsoup4
+requests
