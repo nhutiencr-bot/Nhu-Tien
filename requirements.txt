@@ -1,9 +1,9 @@
 streamlit
 pandas
-vnstock==0.2.9.2.2
+vnstock
 vnstock3
-ipython
 pytz
 plotly
 beautifulsoup4
 requests
+concurrent.futures
