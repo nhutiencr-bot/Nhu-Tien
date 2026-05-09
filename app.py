@@ -8,24 +8,21 @@ import plotly.graph_objects as go
 import concurrent.futures
 import requests
 
-# 1. CÀI ĐẶT GIAO DIỆN & TIÊM CSS LÀM MƯỢT UI
+# 1. CÀI ĐẶT GIAO DIỆN & TIÊM CSS
 st.set_page_config(page_title="Fairy Invest", page_icon="🧚‍♀️", layout="wide")
 
 st.markdown("""
 <style>
-    /* Chỉnh màu nền và bo góc cho các khối metric */
     div[data-testid="stMetric"] {
         background-color: #f0f2f6;
         border-radius: 10px;
         padding: 15px;
         box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
     }
-    /* Chỉnh font chữ tab to và đẹp hơn */
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
         font-size: 18px;
         font-weight: 600;
     }
-    /* Ẩn bớt các viền không cần thiết của dataframe */
     div[data-testid="stDataFrame"] {
         border-radius: 10px;
         overflow: hidden;
@@ -42,7 +39,6 @@ start_index = (now - timedelta(days=5)).strftime('%Y-%m-%d')
 
 is_trading = (now.weekday() < 5) and ((9 <= now.hour < 15) or (now.hour == 15 and now.minute <= 30))
 
-# Thanh Header mượt mà
 col_title, col_status = st.columns([3, 1])
 with col_title:
     st.title("🧚‍♀️ FAIRY INVEST - Dashboard")
@@ -50,7 +46,7 @@ with col_status:
     if is_trading:
         st.success(f"🟢 ĐANG GIAO DỊCH | {now.strftime('%H:%M')}")
     else:
-        st.warning(f"🔴 ĐÃ ĐÓNG CỬA | {end_date}")
+        st.warning(f"🔴 ĐÃ ĐÓNG CỬA | Phiên gần nhất")
     
     if st.button("🔄 Cập nhật dữ liệu mới", use_container_width=True):
         st.cache_data.clear()
@@ -115,27 +111,38 @@ t1, t2, t3 = st.tabs(["📈 VN-INDEX & Đóng góp", "🗺️ Bản đồ Dòng 
 with t1:
     with st.spinner("Đang vẽ biểu đồ VN-INDEX..."):
         try:
+            # Lấy dữ liệu 1 phút (Cho biểu đồ) và dữ liệu Ngày (Cho giá tham chiếu)
             df_idx = stock_historical_data('VNINDEX', start_index, end_date, '1', 'index')
-            if not df_idx.empty:
+            df_daily = stock_historical_data('VNINDEX', start_index, end_date, '1D', 'index')
+            
+            if not df_idx.empty and not df_daily.empty:
                 df_idx['date'] = pd.to_datetime(df_idx['time']).dt.date
                 dates = df_idx['date'].unique()
-                df_t = df_idx[df_idx['date'] == dates[-1]].copy()
-                df_y = df_idx[df_idx['date'] == dates[-2]].copy()
-                cur, ref = df_t.iloc[-1]['close'], df_y.iloc[-1]['close']
                 
-                # Hiển thị điểm số nổi bật
+                # Phiên gần nhất
+                df_t = df_idx[df_idx['date'] == dates[-1]].copy()
+                
+                cur = df_t.iloc[-1]['close']
+                # Lấy giá đóng cửa phiên trước làm tham chiếu (rất ổn định)
+                ref = df_daily.iloc[-2]['close'] if len(df_daily) >= 2 else df_t.iloc[0]['close']
+                
                 st.metric(f"Điểm số VN-INDEX (Lúc {df_t.iloc[-1]['time']})", f"{cur:,.2f}", 
                           f"{cur-ref:+,.2f} ({((cur-ref)/ref*100):+,.2f}%)")
                 st.divider()
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.markdown("#### 🌊 Thanh khoản (Hôm nay vs Hôm qua)")
+                    st.markdown("#### 🌊 Thanh khoản")
                     df_t['ts'] = pd.to_datetime(df_t['time']).dt.strftime('%H:%M')
-                    df_y['ts'] = pd.to_datetime(df_y['time']).dt.strftime('%H:%M')
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=df_y['ts'], y=df_y['volume'].cumsum(), fill='tozeroy', name='Hôm qua', line=dict(color='rgba(150,150,150,0.5)')))
-                    fig.add_trace(go.Scatter(x=df_t['ts'], y=df_t['volume'].cumsum(), fill='tozeroy', name='Hôm nay', line=dict(color=C_GREEN)))
+                    
+                    # Logic thông minh: Nếu API còn giữ dữ liệu phiên trước thì vẽ thêm đường mờ
+                    if len(dates) >= 2:
+                        df_y = df_idx[df_idx['date'] == dates[-2]].copy()
+                        df_y['ts'] = pd.to_datetime(df_y['time']).dt.strftime('%H:%M')
+                        fig.add_trace(go.Scatter(x=df_y['ts'], y=df_y['volume'].cumsum(), fill='tozeroy', name='Phiên trước', line=dict(color='rgba(150,150,150,0.5)')))
+                    
+                    fig.add_trace(go.Scatter(x=df_t['ts'], y=df_t['volume'].cumsum(), fill='tozeroy', name='Phiên gần nhất', line=dict(color=C_GREEN)))
                     fig.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(0,0,0,0)')
                     fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.2)')
                     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.2)')
@@ -153,7 +160,8 @@ with t1:
                         fig_b.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), plot_bgcolor='rgba(0,0,0,0)')
                         fig_b.add_hline(y=0, line_width=1, line_color="black")
                         st.plotly_chart(fig_b, use_container_width=True)
-        except: st.error("Tạm thời không tải được dữ liệu biểu đồ. Vui lòng thử lại sau.")
+        except Exception as e: 
+            st.error("Tạm thời không tải được dữ liệu biểu đồ. API hệ thống ngoài giờ có thể đang dọn dẹp bộ nhớ.")
 
 with t2:
     if not df_100.empty:
