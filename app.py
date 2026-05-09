@@ -104,63 +104,77 @@ def get_index_contrib():
     except: pass
     return pd.DataFrame()
 
-# === HÀM LẤY BÁO CÁO PHÂN TÍCH TỪ VIETSTOCK ===
+# === HÀM MỚI: QUÉT LIÊN TỤC 5 TRANG ĐỂ LẤY TOÀN BỘ BÁO CÁO ===
 @st.cache_data(ttl=3600) 
 def get_analyst_reports():
     reports = []
-    try:
-        url = "https://finance.vietstock.vn/bao-cao-phan-tich/phan-tich-doanh-nghiep"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        r = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        
-        # Tìm các khối chứa bài viết
-        articles = soup.find_all('div', class_='col-xs-12') # Cấu trúc cơ bản
-        
-        for article in articles:
-            a_tag = article.find('a')
-            if not a_tag: continue
-            
-            title = a_tag.text.strip()
-            # Bỏ qua các báo cáo chung chung, chỉ lấy báo cáo có Mã CK ở đầu
-            ticker_match = re.search(r'^([A-Z0-9]{3})\s*:', title)
-            if not ticker_match: continue
-            
-            ticker = ticker_match.group(1)
-            link = "https://finance.vietstock.vn" + a_tag['href'] if a_tag['href'].startswith('/') else a_tag['href']
-            
-            # Lọc Khuyến nghị
-            action_match = re.search(r'(MUA|BÁN|NẮM GIỮ|KHẢ QUAN|KÉM KHẢ QUAN|TÍCH LŨY|TRUNG LẬP)', title, re.IGNORECASE)
-            action = action_match.group(1).upper() if action_match else "ĐÁNH GIÁ"
-            
-            # Lọc Giá mục tiêu
-            price_match = re.search(r'mục tiêu\s*([\d,\.]+)', title, re.IGNORECASE)
-            target_price = price_match.group(1) if price_match else "N/A"
-            
-            # Nếu chạy thành công, nó sẽ cào thực tế từ website
-            reports.append({
-                "Ngày phát hành": now.strftime('%d/%m/%Y'), # Tạm dùng ngày hiện tại nếu DOM quá phức tạp
-                "Mã CK": ticker,
-                "Nguồn CTCK": "Hệ thống",
-                "Khuyến nghị": action,
-                "Giá mục tiêu": target_price,
-                "Tiêu đề Báo cáo": title,
-                "Link gốc": link
-            })
-    except:
-        pass
+    # Header giả lập trình duyệt xịn để vượt Cloudflare
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://finance.vietstock.vn/"
+    }
     
-    # FALLBACK DỮ LIỆU: Kịch bản nếu máy chủ Streamlit bị Vietstock chặn (Cloudflare)
-    # Dữ liệu mẫu khớp 100% với bức ảnh bạn gửi
-    if not reports:
-        reports = [
-            {"Ngày phát hành": "08/05/2026", "Mã CK": "KBC", "Nguồn CTCK": "BSC", "Khuyến nghị": "MUA", "Giá mục tiêu": "42,400", "Tiêu đề Báo cáo": "KBC: Khuyến nghị MUA với giá mục tiêu 42,400 đồng/cổ phiếu", "Link gốc": "https://finance.vietstock.vn/bao-cao-phan-tich/20195/kbc-khuyen-nghi-mua-voi-gia-muc-tieu-42400-dongco-phieu.htm"},
-            {"Ngày phát hành": "08/05/2026", "Mã CK": "HAH", "Nguồn CTCK": "SSV", "Khuyến nghị": "MUA", "Giá mục tiêu": "72,900", "Tiêu đề Báo cáo": "HAH: Khuyến nghị MUA với giá mục tiêu 72,900 đồng/cổ phiếu", "Link gốc": "https://finance.vietstock.vn/bao-cao-phan-tich/phan-tich-doanh-nghiep"},
-            {"Ngày phát hành": "08/05/2026", "Mã CK": "PVT", "Nguồn CTCK": "ACBS", "Khuyến nghị": "MUA", "Giá mục tiêu": "28,200", "Tiêu đề Báo cáo": "PVT: Khuyến nghị MUA với giá mục tiêu 28,200 đồng/cổ phiếu", "Link gốc": "https://finance.vietstock.vn/bao-cao-phan-tich/phan-tich-doanh-nghiep"},
-            {"Ngày phát hành": "08/05/2026", "Mã CK": "KDH", "Nguồn CTCK": "ACBS", "Khuyến nghị": "MUA", "Giá mục tiêu": "34,100", "Tiêu đề Báo cáo": "KDH: Khuyến nghị MUA với giá mục tiêu 34,100 đồng/cổ phiếu", "Link gốc": "https://finance.vietstock.vn/bao-cao-phan-tich/phan-tich-doanh-nghiep"},
-            {"Ngày phát hành": "08/05/2026", "Mã CK": "GEG", "Nguồn CTCK": "ACBS", "Khuyến nghị": "MUA", "Giá mục tiêu": "18,400", "Tiêu đề Báo cáo": "GEG: Khuyến nghị MUA với giá mục tiêu 18,400 đồng/cổ phiếu", "Link gốc": "https://finance.vietstock.vn/bao-cao-phan-tich/phan-tich-doanh-nghiep"}
-        ]
-        
+    # Chạy vòng lặp quét từ trang 1 đến trang 5
+    for page in range(1, 6):
+        try:
+            url = f"https://finance.vietstock.vn/bao-cao-phan-tich/phan-tich-doanh-nghiep?page={page}"
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            
+            # Cào TẤT CẢ các thẻ <a> có chứa link báo cáo trên trang
+            a_tags = soup.find_all('a', href=re.compile(r'/bao-cao-phan-tich/.*\.htm'))
+            
+            for a in a_tags:
+                title = a.text.strip()
+                if len(title) < 15: continue
+                
+                # 1. Bóc tách Mã CK
+                ticker_match = re.search(r'^([A-Z0-9]{3})\s*:', title)
+                if not ticker_match: continue
+                ticker = ticker_match.group(1)
+                
+                # 2. Bóc tách Khuyến nghị
+                action_match = re.search(r'(MUA|BÁN|NẮM GIỮ|KHẢ QUAN|KÉM KHẢ QUAN|TÍCH LŨY|TRUNG LẬP)', title, re.IGNORECASE)
+                action = action_match.group(1).upper() if action_match else "ĐÁNH GIÁ"
+                
+                # 3. Bóc tách Giá mục tiêu
+                price_match = re.search(r'mục tiêu\s*([\d,\.]+)', title, re.IGNORECASE)
+                target_price = price_match.group(1) if price_match else "N/A"
+                
+                href = a.get('href')
+                link = "https://finance.vietstock.vn" + href if href.startswith('/') else href
+                
+                # 4. Tìm Nguồn và Ngày
+                parent = a.find_parent('div') or a.find_parent('tr') or a.find_parent('li')
+                source = "N/A"
+                date_pub = now.strftime('%d/%m/%Y')
+                
+                if parent:
+                    p_text = parent.text
+                    src_match = re.search(r'Nguồn:\s*([A-Za-z0-9\s]+)', p_text)
+                    if src_match: 
+                        source = src_match.group(1).split('\n')[0].strip()
+                    
+                    date_match = re.search(r'(\d{2}/\d{2}/\d{4})', p_text)
+                    if date_match: 
+                        date_pub = date_match.group(1)
+                
+                # Chống lưu trùng lặp báo cáo
+                if link not in [r['Link gốc'] for r in reports]:
+                    reports.append({
+                        "Ngày phát hành": date_pub,
+                        "Mã CK": ticker,
+                        "Nguồn CTCK": source,
+                        "Khuyến nghị": action,
+                        "Giá mục tiêu": target_price,
+                        "Tiêu đề Báo cáo": title,
+                        "Link gốc": link
+                    })
+        except:
+            continue
+            
     return pd.DataFrame(reports)
 
 # 5. HIỂN THỊ GIAO DIỆN CÁC TABS
@@ -251,31 +265,33 @@ with t4:
     st.markdown("### 📝 Tổng hợp Báo Cáo Phân Tích Doanh Nghiệp (Mới nhất)")
     df_reports = get_analyst_reports()
     
-    if not df_100.empty and not df_reports.empty:
-        # Nối "Giá hiện tại" vào bảng để nhà đầu tư so sánh thẳng với "Giá mục tiêu"
-        df_reports = pd.merge(df_reports, df_100[['Mã CK', 'Giá hiện tại']], on='Mã CK', how='left')
+    if df_reports.empty:
+        # Nếu bảng trống trơn, nghĩa là Streamlit Cloud đã bị Vietstock chặn hoàn toàn
+        st.error("⚠️ **Hệ thống bị chặn IP!**\n\nTường lửa của Vietstock hiện đang từ chối kết nối từ máy chủ Streamlit. Để cào được 100% dữ liệu (hàng trăm báo cáo), bạn hãy tải mã nguồn này về và chạy trực tiếp trên máy tính cá nhân (Localhost) nhé!")
+    else:
+        if not df_100.empty:
+            df_reports = pd.merge(df_reports, df_100[['Mã CK', 'Giá hiện tại']], on='Mã CK', how='left')
+            cols = ['Ngày phát hành', 'Mã CK', 'Nguồn CTCK', 'Khuyến nghị', 'Giá hiện tại', 'Giá mục tiêu', 'Tiêu đề Báo cáo', 'Link gốc']
+            df_reports = df_reports[cols]
         
-        # Sắp xếp lại thứ tự cột cho chuyên nghiệp
-        cols = ['Ngày phát hành', 'Mã CK', 'Nguồn CTCK', 'Khuyến nghị', 'Giá hiện tại', 'Giá mục tiêu', 'Tiêu đề Báo cáo', 'Link gốc']
-        df_reports = df_reports[cols]
-    
-    def style_action(val):
-        if 'MUA' in str(val).upper() or 'KHẢ QUAN' in str(val).upper() or 'TÍCH LŨY' in str(val).upper():
-            return f'color: {C_GREEN}; font-weight: bold; background-color: rgba(0, 230, 118, 0.1);'
-        elif 'BÁN' in str(val).upper() or 'KÉM' in str(val).upper():
-            return f'color: {C_RED}; font-weight: bold; background-color: rgba(255, 77, 77, 0.1);'
-        return f'color: {C_REF}; font-weight: bold;'
+        def style_action(val):
+            val_str = str(val).upper()
+            if any(x in val_str for x in ['MUA', 'KHẢ QUAN', 'TÍCH LŨY']):
+                return f'color: {C_GREEN}; font-weight: bold; background-color: rgba(0, 230, 118, 0.1);'
+            elif any(x in val_str for x in ['BÁN', 'KÉM']):
+                return f'color: {C_RED}; font-weight: bold; background-color: rgba(255, 77, 77, 0.1);'
+            return f'color: {C_REF}; font-weight: bold;'
 
-    st.dataframe(
-        df_reports.style.map(style_action, subset=['Khuyến nghị']).format({'Giá hiện tại': '{:,.2f}'}),
-        column_config={
-            "Ngày phát hành": st.column_config.TextColumn("Ngày cập nhật", width="small"),
-            "Nguồn CTCK": st.column_config.TextColumn("CTCK", width="small"),
-            "Tiêu đề Báo cáo": st.column_config.TextColumn("Nội dung tóm tắt", width="large"),
-            "Link gốc": st.column_config.LinkColumn("Tài liệu", display_text="📥 Tải về"),
-            "Giá mục tiêu": st.column_config.TextColumn("Giá mục tiêu"),
-        },
-        use_container_width=True,
-        hide_index=True,
-        height=500
-    )
+        st.dataframe(
+            df_reports.style.map(style_action, subset=['Khuyến nghị']).format({'Giá hiện tại': '{:,.2f}'}),
+            column_config={
+                "Ngày phát hành": st.column_config.TextColumn("Ngày cập nhật", width="small"),
+                "Nguồn CTCK": st.column_config.TextColumn("CTCK", width="small"),
+                "Tiêu đề Báo cáo": st.column_config.TextColumn("Nội dung tóm tắt", width="large"),
+                "Link gốc": st.column_config.LinkColumn("Tài liệu", display_text="📥 Tải về"),
+                "Giá mục tiêu": st.column_config.TextColumn("Giá mục tiêu"),
+            },
+            use_container_width=True,
+            hide_index=True,
+            height=600
+        )
