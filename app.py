@@ -109,59 +109,67 @@ with st.spinner("Đang tính toán dữ liệu thị trường..."):
 t1, t2, t3 = st.tabs(["📈 VN-INDEX & Đóng góp", "🗺️ Bản đồ Dòng tiền", "📊 Top 100 Cổ phiếu"])
 
 with t1:
-    with st.spinner("Đang vẽ biểu đồ VN-INDEX..."):
+    # 5.1. CÁCH LY ĐIỂM SỐ VN-INDEX (Lấy từ dữ liệu Ngày 1D cho chắc chắn)
+    try:
+        df_daily = stock_historical_data('VNINDEX', start_index, end_date, '1D', 'index')
+        if not df_daily.empty and len(df_daily) >= 2:
+            cur = df_daily.iloc[-1]['close']
+            ref = df_daily.iloc[-2]['close']
+            time_str = df_daily.iloc[-1]['time']
+            st.metric(f"Điểm số VN-INDEX (Chốt phiên {time_str})", f"{cur:,.2f}", 
+                      f"{cur-ref:+,.2f} ({((cur-ref)/ref*100):+,.2f}%)")
+            st.divider()
+    except:
+        st.warning("Đang kết nối để lấy điểm số VN-INDEX...")
+
+    c1, c2 = st.columns(2)
+    
+    # 5.2. CÁCH LY THANH KHOẢN INTRADAY
+    with c1:
+        st.markdown("#### 🌊 Thanh khoản")
         try:
-            # Lấy dữ liệu 1 phút (Cho biểu đồ) và dữ liệu Ngày (Cho giá tham chiếu)
             df_idx = stock_historical_data('VNINDEX', start_index, end_date, '1', 'index')
-            df_daily = stock_historical_data('VNINDEX', start_index, end_date, '1D', 'index')
-            
-            if not df_idx.empty and not df_daily.empty:
+            if not df_idx.empty:
                 df_idx['date'] = pd.to_datetime(df_idx['time']).dt.date
                 dates = df_idx['date'].unique()
                 
-                # Phiên gần nhất
                 df_t = df_idx[df_idx['date'] == dates[-1]].copy()
+                df_t['ts'] = pd.to_datetime(df_t['time']).dt.strftime('%H:%M')
                 
-                cur = df_t.iloc[-1]['close']
-                # Lấy giá đóng cửa phiên trước làm tham chiếu (rất ổn định)
-                ref = df_daily.iloc[-2]['close'] if len(df_daily) >= 2 else df_t.iloc[0]['close']
+                fig = go.Figure()
+                if len(dates) >= 2:
+                    df_y = df_idx[df_idx['date'] == dates[-2]].copy()
+                    df_y['ts'] = pd.to_datetime(df_y['time']).dt.strftime('%H:%M')
+                    fig.add_trace(go.Scatter(x=df_y['ts'], y=df_y['volume'].cumsum(), fill='tozeroy', name='Phiên trước', line=dict(color='rgba(150,150,150,0.5)')))
                 
-                st.metric(f"Điểm số VN-INDEX (Lúc {df_t.iloc[-1]['time']})", f"{cur:,.2f}", 
-                          f"{cur-ref:+,.2f} ({((cur-ref)/ref*100):+,.2f}%)")
-                st.divider()
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown("#### 🌊 Thanh khoản")
-                    df_t['ts'] = pd.to_datetime(df_t['time']).dt.strftime('%H:%M')
-                    fig = go.Figure()
-                    
-                    # Logic thông minh: Nếu API còn giữ dữ liệu phiên trước thì vẽ thêm đường mờ
-                    if len(dates) >= 2:
-                        df_y = df_idx[df_idx['date'] == dates[-2]].copy()
-                        df_y['ts'] = pd.to_datetime(df_y['time']).dt.strftime('%H:%M')
-                        fig.add_trace(go.Scatter(x=df_y['ts'], y=df_y['volume'].cumsum(), fill='tozeroy', name='Phiên trước', line=dict(color='rgba(150,150,150,0.5)')))
-                    
-                    fig.add_trace(go.Scatter(x=df_t['ts'], y=df_t['volume'].cumsum(), fill='tozeroy', name='Phiên gần nhất', line=dict(color=C_GREEN)))
-                    fig.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(0,0,0,0)')
-                    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.2)')
-                    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.2)')
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with c2:
-                    st.markdown("#### 🎯 Tác động tới VN-INDEX")
-                    df_c = get_index_contrib()
-                    if not df_c.empty:
-                        df_res = pd.concat([df_c[df_c['Điểm']>0].nlargest(10, 'Điểm'), 
-                                           df_c[df_c['Điểm']<0].nsmallest(10, 'Điểm')]).sort_values('Điểm', ascending=False)
-                        b_cols = [C_GREEN if v > 0 else C_RED for v in df_res['Điểm']]
-                        fig_b = go.Figure(go.Bar(x=df_res['Mã CK'], y=df_res['Điểm'], marker_color=b_cols, 
-                                                 text=df_res['Điểm'].apply(lambda x: f"{x:+.2f}"), textposition='outside'))
-                        fig_b.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), plot_bgcolor='rgba(0,0,0,0)')
-                        fig_b.add_hline(y=0, line_width=1, line_color="black")
-                        st.plotly_chart(fig_b, use_container_width=True)
-        except Exception as e: 
-            st.error("Tạm thời không tải được dữ liệu biểu đồ. API hệ thống ngoài giờ có thể đang dọn dẹp bộ nhớ.")
+                fig.add_trace(go.Scatter(x=df_t['ts'], y=df_t['volume'].cumsum(), fill='tozeroy', name='Phiên gần nhất', line=dict(color=C_GREEN)))
+                fig.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(0,0,0,0)')
+                fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.2)')
+                fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.2)')
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("☕ Đồ thị thanh khoản 1 phút đang được hệ thống bảo trì cuối tuần.")
+        except:
+            st.info("☕ Đồ thị thanh khoản 1 phút đang được hệ thống bảo trì cuối tuần.")
+            
+    # 5.3. CÁCH LY ĐÓNG GÓP CHỈ SỐ
+    with c2:
+        st.markdown("#### 🎯 Tác động tới VN-INDEX")
+        try:
+            df_c = get_index_contrib()
+            if not df_c.empty:
+                df_res = pd.concat([df_c[df_c['Điểm']>0].nlargest(10, 'Điểm'), 
+                                   df_c[df_c['Điểm']<0].nsmallest(10, 'Điểm')]).sort_values('Điểm', ascending=False)
+                b_cols = [C_GREEN if v > 0 else C_RED for v in df_res['Điểm']]
+                fig_b = go.Figure(go.Bar(x=df_res['Mã CK'], y=df_res['Điểm'], marker_color=b_cols, 
+                                         text=df_res['Điểm'].apply(lambda x: f"{x:+.2f}"), textposition='outside'))
+                fig_b.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), plot_bgcolor='rgba(0,0,0,0)')
+                fig_b.add_hline(y=0, line_width=1, line_color="black")
+                st.plotly_chart(fig_b, use_container_width=True)
+            else:
+                st.info("☕ Biểu đồ tác động đang được cập nhật.")
+        except:
+            st.info("☕ Biểu đồ tác động đang được cập nhật.")
 
 with t2:
     if not df_100.empty:
