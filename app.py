@@ -7,7 +7,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import concurrent.futures
 import requests
-from bs4 import BeautifulSoup
 import re
 
 # 1. CÀI ĐẶT GIAO DIỆN & TIÊM CSS
@@ -104,80 +103,64 @@ def get_index_contrib():
     except: pass
     return pd.DataFrame()
 
-# === HÀM MỚI: QUÉT LIÊN TỤC 5 TRANG ĐỂ LẤY TOÀN BỘ BÁO CÁO ===
-@st.cache_data(ttl=3600) 
-def get_analyst_reports():
+# === HÀM LẤY BÁO CÁO PHÂN TÍCH TỪ CAFEF ===
+@st.cache_data(ttl=3600)
+def get_cafef_reports():
     reports = []
-    # Header giả lập trình duyệt xịn để vượt Cloudflare
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://finance.vietstock.vn/"
-    }
+    try:
+        # Sử dụng API nội bộ của CafeF (Lấy 50 báo cáo mới nhất)
+        url = "https://s.cafef.vn/ajax/KhuyenNghi_Update.aspx?symbol=&DoanhNghiepID=-1&NganhCoPhieuID=-1&CongTyKienNghiID=-1&TuNgay=&DenNgay=&PageIndex=1&PageSize=50"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        
+        # Vì API trả về HTML thô chứa các thẻ <li>, ta dùng Regex để bóc dữ liệu cực nhanh
+        html_data = r.text
+        
+        # Bóc từng khối báo cáo
+        blocks = re.findall(r'<li.*?>(.*?)</li>', html_data, re.DOTALL)
+        
+        for block in blocks:
+            # 1. Tìm Mã CK và Tiêu đề
+            title_match = re.search(r'<a[^>]*class="doc_title"[^>]*>(.*?)</a>', block)
+            if not title_match: continue
+            title = title_match.group(1).strip()
+            
+            ticker_match = re.search(r'([A-Z0-9]{3})', title)
+            ticker = ticker_match.group(1) if ticker_match else "N/A"
+            
+            # 2. Lấy link PDF gốc
+            link_match = re.search(r'href="(/Report/Download\.aspx\?id=[^"]+)"', block)
+            link = "https://s.cafef.vn" + link_match.group(1) if link_match else "N/A"
+            
+            # 3. Nguồn CTCK và Ngày tháng
+            source_match = re.search(r'<span class="doc_source".*?>(.*?)</span>', block)
+            source = source_match.group(1).strip() if source_match else "N/A"
+            
+            date_match = re.search(r'<span class="doc_date".*?>(.*?)</span>', block)
+            date_pub = date_match.group(1).strip() if date_match else "N/A"
+            
+            # 4. Khuyến nghị và Giá mục tiêu (CafeF thường giấu trong tiêu đề)
+            action_match = re.search(r'(MUA|BÁN|NẮM GIỮ|KHẢ QUAN|KÉM KHẢ QUAN|TÍCH LŨY|TRUNG LẬP)', title, re.IGNORECASE)
+            action = action_match.group(1).upper() if action_match else "ĐÁNH GIÁ"
+            
+            price_match = re.search(r'mục tiêu.*?([\d,\.]+)', title, re.IGNORECASE)
+            target_price = price_match.group(1) if price_match else "N/A"
+            
+            if link != "N/A":
+                reports.append({
+                    "Ngày": date_pub,
+                    "Mã CK": ticker,
+                    "CTCK": source,
+                    "Khuyến nghị": action,
+                    "Giá mục tiêu": target_price,
+                    "Tiêu đề Báo cáo": title,
+                    "Link PDF": link
+                })
+    except: pass
     
-    # Chạy vòng lặp quét từ trang 1 đến trang 5
-    for page in range(1, 6):
-        try:
-            url = f"https://finance.vietstock.vn/bao-cao-phan-tich/phan-tich-doanh-nghiep?page={page}"
-            r = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, 'html.parser')
-            
-            # Cào TẤT CẢ các thẻ <a> có chứa link báo cáo trên trang
-            a_tags = soup.find_all('a', href=re.compile(r'/bao-cao-phan-tich/.*\.htm'))
-            
-            for a in a_tags:
-                title = a.text.strip()
-                if len(title) < 15: continue
-                
-                # 1. Bóc tách Mã CK
-                ticker_match = re.search(r'^([A-Z0-9]{3})\s*:', title)
-                if not ticker_match: continue
-                ticker = ticker_match.group(1)
-                
-                # 2. Bóc tách Khuyến nghị
-                action_match = re.search(r'(MUA|BÁN|NẮM GIỮ|KHẢ QUAN|KÉM KHẢ QUAN|TÍCH LŨY|TRUNG LẬP)', title, re.IGNORECASE)
-                action = action_match.group(1).upper() if action_match else "ĐÁNH GIÁ"
-                
-                # 3. Bóc tách Giá mục tiêu
-                price_match = re.search(r'mục tiêu\s*([\d,\.]+)', title, re.IGNORECASE)
-                target_price = price_match.group(1) if price_match else "N/A"
-                
-                href = a.get('href')
-                link = "https://finance.vietstock.vn" + href if href.startswith('/') else href
-                
-                # 4. Tìm Nguồn và Ngày
-                parent = a.find_parent('div') or a.find_parent('tr') or a.find_parent('li')
-                source = "N/A"
-                date_pub = now.strftime('%d/%m/%Y')
-                
-                if parent:
-                    p_text = parent.text
-                    src_match = re.search(r'Nguồn:\s*([A-Za-z0-9\s]+)', p_text)
-                    if src_match: 
-                        source = src_match.group(1).split('\n')[0].strip()
-                    
-                    date_match = re.search(r'(\d{2}/\d{2}/\d{4})', p_text)
-                    if date_match: 
-                        date_pub = date_match.group(1)
-                
-                # Chống lưu trùng lặp báo cáo
-                if link not in [r['Link gốc'] for r in reports]:
-                    reports.append({
-                        "Ngày phát hành": date_pub,
-                        "Mã CK": ticker,
-                        "Nguồn CTCK": source,
-                        "Khuyến nghị": action,
-                        "Giá mục tiêu": target_price,
-                        "Tiêu đề Báo cáo": title,
-                        "Link gốc": link
-                    })
-        except:
-            continue
-            
     return pd.DataFrame(reports)
 
-# 5. HIỂN THỊ GIAO DIỆN CÁC TABS
+# 5. HIỂN THỊ GIAO DIỆN
 with st.spinner("Đang tính toán dữ liệu thị trường..."):
     df_100 = get_market_data()
 
@@ -259,19 +242,19 @@ with t3:
                      .map(style_v, subset=['+/-', '%']), use_container_width=True, hide_index=True, height=600)
 
 # ==========================================
-# TAB 4: BÁO CÁO KHUYẾN NGHỊ CTCK 
+# TAB 4: BÁO CÁO TỪ CAFEF
 # ==========================================
 with t4:
-    st.markdown("### 📝 Tổng hợp Báo Cáo Phân Tích Doanh Nghiệp (Mới nhất)")
-    df_reports = get_analyst_reports()
+    st.markdown("### 📝 Tổng hợp Báo Cáo Phân Tích (Nguồn: CafeF)")
+    df_reports = get_cafef_reports()
     
     if df_reports.empty:
-        # Nếu bảng trống trơn, nghĩa là Streamlit Cloud đã bị Vietstock chặn hoàn toàn
-        st.error("⚠️ **Hệ thống bị chặn IP!**\n\nTường lửa của Vietstock hiện đang từ chối kết nối từ máy chủ Streamlit. Để cào được 100% dữ liệu (hàng trăm báo cáo), bạn hãy tải mã nguồn này về và chạy trực tiếp trên máy tính cá nhân (Localhost) nhé!")
+        st.error("⚠️ Tạm thời không lấy được dữ liệu. Hệ thống của CafeF có thể đang bảo trì.")
     else:
+        # Nối giá hiện tại
         if not df_100.empty:
             df_reports = pd.merge(df_reports, df_100[['Mã CK', 'Giá hiện tại']], on='Mã CK', how='left')
-            cols = ['Ngày phát hành', 'Mã CK', 'Nguồn CTCK', 'Khuyến nghị', 'Giá hiện tại', 'Giá mục tiêu', 'Tiêu đề Báo cáo', 'Link gốc']
+            cols = ['Ngày', 'Mã CK', 'CTCK', 'Khuyến nghị', 'Giá hiện tại', 'Giá mục tiêu', 'Tiêu đề Báo cáo', 'Link PDF']
             df_reports = df_reports[cols]
         
         def style_action(val):
@@ -285,11 +268,11 @@ with t4:
         st.dataframe(
             df_reports.style.map(style_action, subset=['Khuyến nghị']).format({'Giá hiện tại': '{:,.2f}'}),
             column_config={
-                "Ngày phát hành": st.column_config.TextColumn("Ngày cập nhật", width="small"),
-                "Nguồn CTCK": st.column_config.TextColumn("CTCK", width="small"),
-                "Tiêu đề Báo cáo": st.column_config.TextColumn("Nội dung tóm tắt", width="large"),
-                "Link gốc": st.column_config.LinkColumn("Tài liệu", display_text="📥 Tải về"),
-                "Giá mục tiêu": st.column_config.TextColumn("Giá mục tiêu"),
+                "Ngày": st.column_config.TextColumn("Ngày", width="small"),
+                "CTCK": st.column_config.TextColumn("CTCK", width="small"),
+                "Tiêu đề Báo cáo": st.column_config.TextColumn("Nội dung báo cáo", width="large"),
+                "Link PDF": st.column_config.LinkColumn("Tài liệu", display_text="📥 Tải PDF"),
+                "Giá mục tiêu": st.column_config.TextColumn("Mục tiêu"),
             },
             use_container_width=True,
             hide_index=True,
