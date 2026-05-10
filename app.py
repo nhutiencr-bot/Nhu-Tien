@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from vnstock import *
 from datetime import datetime, timedelta
 import pytz
 import plotly.express as px
@@ -9,6 +8,12 @@ import concurrent.futures
 import requests
 import re
 from bs4 import BeautifulSoup
+
+# Import vnstock an toàn
+try:
+    from vnstock import stock_historical_data, listing_companies
+except ImportError:
+    pass
 
 # ==========================================
 # 1. CÀI ĐẶT GIAO DIỆN & TIÊM CSS
@@ -21,17 +26,14 @@ st.markdown("""
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p { font-size: 18px; font-weight: 600; }
     div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
     
-    /* Giao diện Tab 5 (Kịch bản) */
     .scenario-card { background-color: #1e1e2f; color: #ffffff; padding: 25px; border-radius: 15px; border-left: 5px solid #ffaa00; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .scenario-title { color: #ffaa00; font-size: 22px; font-weight: bold; margin-bottom: 15px; }
     .prob-badge { background-color: #33334d; padding: 3px 8px; border-radius: 5px; font-weight: bold; color: #ffaa00; }
     
-    /* Menu bên phải Tab 5 */
     div.row-widget.stRadio > div { flex-direction: column; gap: 10px; }
     div.row-widget.stRadio > div > label {
         background-color: #2a2a3c; color: white; padding: 12px 15px;
-        border-radius: 8px; border: 1px solid #3f3f5a;
-        cursor: pointer; transition: 0.3s; width: 100%; margin: 0;
+        border-radius: 8px; border: 1px solid #3f3f5a; cursor: pointer; transition: 0.3s; width: 100%; margin: 0;
     }
     div.row-widget.stRadio > div > label:hover { background-color: #3f3f5a; border-color: #ffaa00; }
     div.row-widget.stRadio > div > label[data-checked="true"] { background-color: #ffaa00; color: #1e1e2f; font-weight: bold; border: none; }
@@ -41,15 +43,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. XỬ LÝ THỜI GIAN "BẤT TỬ" (Chống lỗi cuối tuần)
+# 2. XỬ LÝ THỜI GIAN "BẤT TỬ"
 # ==========================================
 vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 now = datetime.now(vn_tz)
 
-# Lùi ngày nếu là cuối tuần để có dữ liệu vẽ chart
-if now.weekday() == 5: target_date = now - timedelta(days=1)
-elif now.weekday() == 6: target_date = now - timedelta(days=2)
-else: target_date = now
+# Lùi ngày nếu là cuối tuần để có dữ liệu
+if now.weekday() == 5: 
+    target_date = now - timedelta(days=1)
+elif now.weekday() == 6: 
+    target_date = now - timedelta(days=2)
+else: 
+    target_date = now
 
 end_date = target_date.strftime('%Y-%m-%d')
 start_stock = (target_date - timedelta(days=7)).strftime('%Y-%m-%d')
@@ -67,7 +72,7 @@ with col_status:
     else:
         st.warning(f"🔴 ĐÃ ĐÓNG CỬA | Phiên: {end_date}")
     
-    if st.button("🔄 Cập nhật dữ liệu mới", use_container_width=True):
+    if st.button("🔄 Làm mới & Xóa Lỗi", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -76,36 +81,71 @@ C_RED, C_DRED, C_FLOOR = '#ff4d4d', '#b30000', '#00e5ff'
 MAP_COLORS = [[0.0, C_FLOOR], [0.014, C_FLOOR], [0.014, C_DRED], [0.285, C_DRED], [0.285, C_RED], [0.499, C_RED], [0.499, C_REF], [0.501, C_REF], [0.501, C_GREEN], [0.985, C_GREEN], [0.985, C_CEIL], [1.0, C_CEIL]]
 
 # ==========================================
-# 3. CÁC HÀM LẤY DỮ LIỆU TỐI ƯU
+# 3. DỮ LIỆU DỰ PHÒNG (MOCK DATA)
 # ==========================================
-@st.cache_data(ttl=300)
-def get_hose_tickers():
-    try: return listing_companies()[listing_companies()['comGroupCode'] == 'HOSE']['ticker'].head(150).tolist()
-    except: return ['VCB', 'VHM', 'VIC', 'FPT', 'HPG', 'SSI', 'VND']
+def get_mock_market_data():
+    return pd.DataFrame([
+        {'Mã CK': 'VCB', 'Giá hiện tại': 92.5, '+/-': 1.2, '%': 1.3, 'Tổng KL': 2500000},
+        {'Mã CK': 'FPT', 'Giá hiện tại': 135.0, '+/-': 2.5, '%': 1.8, 'Tổng KL': 4500000},
+        {'Mã CK': 'HPG', 'Giá hiện tại': 29.5, '+/-': -0.3, '%': -1.0, 'Tổng KL': 15000000},
+        {'Mã CK': 'SSI', 'Giá hiện tại': 36.2, '+/-': 0.8, '%': 2.2, 'Tổng KL': 8000000},
+        {'Mã CK': 'VHM', 'Giá hiện tại': 42.1, '+/-': 0.0, '%': 0.0, 'Tổng KL': 5000000},
+    ])
 
+def get_mock_hist_data():
+    dates = pd.date_range(end=now, periods=30, freq='B')
+    df = pd.DataFrame({
+        'time': dates,
+        'close': [1200 + i*2 for i in range(30)],
+        'volume': [500000000 + i*1000000 for i in range(30)]
+    })
+    df['MA20'] = df['close'].rolling(window=20).mean()
+    df['Vol_MA20'] = df['volume'].rolling(window=20).mean()
+    return df.dropna()
+
+# ==========================================
+# 4. CÁC HÀM LẤY DỮ LIỆU CÓ CHỐNG GÃY
+# ==========================================
 @st.cache_data(ttl=120)
 def get_market_data():
-    tickers = get_hose_tickers()
-    def fetch(t):
-        try:
-            d = stock_historical_data(t, start_stock, end_date, '1D', 'stock')
-            if len(d) < 2: return None
-            curr, prev = d.iloc[-1]['close'], d.iloc[-2]['close']
-            return {'Mã CK': t, 'Giá hiện tại': curr, '+/-': round(curr-prev, 2), '%': round((curr-prev)/prev*100, 2), 'Tổng KL': int(d.iloc[-1]['volume'])}
-        except: return None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exe: # Max_worker=5 để chống tràn RAM
-        res = list(exe.map(fetch, tickers))
-    df = pd.DataFrame([r for r in res if r])
-    return df.sort_values('Tổng KL', ascending=False).head(100) if not df.empty else df
+    try:
+        tickers = listing_companies()[listing_companies()['comGroupCode'] == 'HOSE']['ticker'].head(150).tolist()
+        def fetch(t):
+            try:
+                d = stock_historical_data(t, start_stock, end_date, '1D', 'stock')
+                if len(d) < 2: return None
+                curr, prev = d.iloc[-1]['close'], d.iloc[-2]['close']
+                return {'Mã CK': t, 'Giá hiện tại': curr, '+/-': round(curr-prev, 2), '%': round((curr-prev)/prev*100, 2), 'Tổng KL': int(d.iloc[-1]['volume'])}
+            except: return None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exe:
+            res = list(exe.map(fetch, tickers))
+        df = pd.DataFrame([r for r in res if r])
+        if df.empty: raise Exception("Rỗng")
+        return df.sort_values('Tổng KL', ascending=False).head(100), False
+    except:
+        return get_mock_market_data(), True
 
 @st.cache_data(ttl=60)
 def get_index_contrib():
     try:
         url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/intraday/index/ticker-contribute?index=VNINDEX"
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
-        if r.status_code == 200: return pd.DataFrame(r.json()['data'])[['ticker', 'point']].rename(columns={'ticker': 'Mã CK', 'point': 'Điểm'})
+        if r.status_code == 200: 
+            return pd.DataFrame(r.json()['data'])[['ticker', 'point']].rename(columns={'ticker': 'Mã CK', 'point': 'Điểm'})
     except: pass
-    return pd.DataFrame()
+    return pd.DataFrame([{'Mã CK': 'FPT', 'Điểm': 1.5}, {'Mã CK': 'VCB', 'Điểm': 1.2}, {'Mã CK': 'VIC', 'Điểm': -0.8}])
+
+@st.cache_data(ttl=300)
+def get_vnindex_history():
+    try:
+        df = stock_historical_data('VNINDEX', start_hist, end_date, '1D', 'index')
+        if not df.empty:
+            df['MA20'] = df['close'].rolling(window=20).mean()
+            df['Vol_MA20'] = df['volume'].rolling(window=20).mean()
+            return df, False
+        raise Exception("Rỗng")
+    except:
+        return get_mock_hist_data(), True
 
 @st.cache_data(ttl=3600)
 def get_cafef_reports():
@@ -129,24 +169,17 @@ def get_cafef_reports():
     except: pass
     return pd.DataFrame(reports)
 
-@st.cache_data(ttl=300)
-def get_vnindex_history():
-    try:
-        df = stock_historical_data('VNINDEX', start_hist, end_date, '1D', 'index')
-        if not df.empty:
-            df['MA20'] = df['close'].rolling(window=20).mean()
-            df['Vol_MA20'] = df['volume'].rolling(window=20).mean()
-        return df
-    except: return pd.DataFrame()
-
 # ==========================================
-# 4. HIỂN THỊ GIAO DIỆN CÁC TABS
+# 5. XUẤT GIAO DIỆN CHÍNH
 # ==========================================
-with st.spinner("Đang tính toán dữ liệu thị trường..."):
-    df_100 = get_market_data()
-    df_hist = get_vnindex_history()
+with st.spinner("Đang tải hệ thống..."):
+    df_100, is_mock_market = get_market_data()
+    df_hist, is_mock_hist = get_vnindex_history()
 
-t1, t2, t3, t4, t5 = st.tabs(["📈 VN-INDEX & Đóng góp", "🗺️ Bản đồ Dòng tiền", "📊 Top 100 Cổ phiếu", "📝 Khuyến Nghị CTCK", "🔮 Chiến lược Giao dịch"])
+if is_mock_market or is_mock_hist:
+    st.error("⚠️ **Hệ thống đang dùng Dữ liệu Mô phỏng.** Có thể do ngoài giờ hành chính hoặc Streamlit bị chặn IP. Hãy tải code về chạy trên máy tính (Local) để lấy dữ liệu thực.")
+
+t1, t2, t3, t4, t5 = st.tabs(["📈 VN-INDEX & Đóng góp", "🗺️ Bản đồ Dòng tiền", "📊 Top Cổ phiếu", "📝 Khuyến Nghị CTCK", "🔮 Chiến lược Giao dịch"])
 
 with t1:
     try:
@@ -171,10 +204,17 @@ with t1:
                     df_y['ts'] = pd.to_datetime(df_y['time']).dt.strftime('%H:%M')
                     fig.add_trace(go.Scatter(x=df_y['ts'], y=df_y['volume'].cumsum(), fill='tozeroy', name='Phiên trước', line=dict(color='rgba(150,150,150,0.5)')))
                 fig.add_trace(go.Scatter(x=df_t['ts'], y=df_t['volume'].cumsum(), fill='tozeroy', name='Phiên gần nhất', line=dict(color=C_GREEN)))
-                fig.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(0,0,0,0)')
+                
+                # Đã sửa lỗi đứt dòng cập nhật Layout
+                fig.update_layout(
+                    height=380, 
+                    margin=dict(l=10, r=10, t=10, b=10), 
+                    legend=dict(orientation="h", y=1.1), 
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
                 st.plotly_chart(fig, use_container_width=True)
-            else: st.info("Chưa có đồ thị thanh khoản.")
-        except: st.info("Đang tải đồ thị thanh khoản...")
+            else: st.info("Dùng dữ liệu mô phỏng, chưa có biểu đồ thanh khoản intraday.")
+        except: st.info("Dùng dữ liệu mô phỏng, chưa có biểu đồ thanh khoản intraday.")
             
     with c2:
         st.markdown("#### 🎯 Tác động tới VN-INDEX")
@@ -183,8 +223,18 @@ with t1:
             if not df_c.empty:
                 df_res = pd.concat([df_c[df_c['Điểm']>0].nlargest(10, 'Điểm'), df_c[df_c['Điểm']<0].nsmallest(10, 'Điểm')]).sort_values('Điểm', ascending=False)
                 b_cols = [C_GREEN if v > 0 else C_RED for v in df_res['Điểm']]
-                fig_b = go.Figure(go.Bar(x=df_res['Mã CK'], y=df_res['Điểm'], marker_color=b_cols, text=df_res['Điểm'].apply(lambda x: f"{x:+.2f}"), textposition='outside'))
-                fig_b.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), plot_bgcolor='rgba(0,0,0,0)')
+                fig_b = go.Figure(go.Bar(
+                    x=df_res['Mã CK'], 
+                    y=df_res['Điểm'], 
+                    marker_color=b_cols, 
+                    text=df_res['Điểm'].apply(lambda x: f"{x:+.2f}"), 
+                    textposition='outside'
+                ))
+                fig_b.update_layout(
+                    height=380, 
+                    margin=dict(l=10, r=10, t=10, b=10), 
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
                 st.plotly_chart(fig_b, use_container_width=True)
         except: st.info("Biểu đồ tác động đang tải...")
 
@@ -197,7 +247,9 @@ with t2:
 
 with t3:
     if not df_100.empty:
-        def style_v(v): return f'color: {C_CEIL if v>=6.8 else C_FLOOR if v<=-6.8 else C_GREEN if v>0 else C_RED if v<0 else C_REF}; font-weight: bold;'
+        def style_v(v): 
+            if pd.isna(v): return ''
+            return f'color: {C_CEIL if v>=6.8 else C_FLOOR if v<=-6.8 else C_GREEN if v>0 else C_RED if v<0 else C_REF}; font-weight: bold;'
         st.dataframe(df_100.style.format({'Giá hiện tại': '{:,.2f}', '+/-': '{:+,.2f}', '%': '{:+,.2f}%', 'Tổng KL': '{:,.0f}'}).map(style_v, subset=['+/-', '%']), use_container_width=True, hide_index=True, height=600)
 
 with t4:
@@ -206,13 +258,22 @@ with t4:
     if not df_reports.empty:
         if not df_100.empty:
             df_reports = pd.merge(df_reports, df_100[['Mã CK', 'Giá hiện tại']], on='Mã CK', how='left')
-            df_reports = df_reports[['Ngày', 'Mã CK', 'CTCK', 'Khuyến nghị', 'Giá hiện tại', 'Giá mục tiêu', 'Tiêu đề Báo cáo', 'Link PDF']]
+            cols = ['Ngày', 'Mã CK', 'CTCK', 'Khuyến nghị', 'Giá hiện tại', 'Giá mục tiêu', 'Tiêu đề Báo cáo', 'Link PDF']
+            # Cắt bớt cột nếu không tìm thấy giá (để chống lỗi)
+            df_reports = df_reports[[c for c in cols if c in df_reports.columns]]
+            
         def style_act(val):
             v = str(val).upper()
             if any(x in v for x in ['MUA', 'KHẢ QUAN', 'TÍCH LŨY']): return f'color: {C_GREEN}; font-weight: bold; background-color: rgba(0, 230, 118, 0.1);'
             elif any(x in v for x in ['BÁN', 'KÉM']): return f'color: {C_RED}; font-weight: bold; background-color: rgba(255, 77, 77, 0.1);'
             return f'color: {C_REF}; font-weight: bold;'
-        st.dataframe(df_reports.style.map(style_act, subset=['Khuyến nghị']).format({'Giá hiện tại': '{:,.2f}'}), column_config={"Link PDF": st.column_config.LinkColumn("Tài liệu", display_text="📥 Tải PDF")}, use_container_width=True, hide_index=True, height=600)
+            
+        st.dataframe(
+            df_reports.style.map(style_act, subset=['Khuyến nghị']).format({'Giá hiện tại': '{:,.2f}'}), 
+            column_config={"Link PDF": st.column_config.LinkColumn("Tài liệu", display_text="📥 Tải PDF")}, 
+            use_container_width=True, hide_index=True, height=600
+        )
+    else: st.info("Không có dữ liệu báo cáo.")
 
 # ==========================================
 # TAB 5: KỊCH BẢN THỊ TRƯỜNG TỰ ĐỘNG CHẤM ĐIỂM
@@ -222,13 +283,16 @@ with t5:
     
     with col_menu:
         st.markdown("<h4 style='color: white;'>📑 Menu Phân Tích</h4>", unsafe_allow_html=True)
-        tab5_option = st.radio("Chọn chức năng:", ["🔮 Kịch bản What-if", "📈 Xu hướng Giá", "📊 Xu hướng Khối lượng", "⚖️ Cung - Cầu"], label_visibility="collapsed")
+        tab5_option = st.radio(
+            "Chọn chức năng:", 
+            ["🔮 Kịch bản What-if", "📈 Xu hướng Giá", "📊 Xu hướng Khối lượng", "⚖️ Cung - Cầu"], 
+            label_visibility="collapsed"
+        )
 
     with col_content:
         if df_hist.empty or df_100.empty:
             st.warning("Đang kết nối dữ liệu để phân tích Kịch bản...")
         else:
-            # Lấy thông số Real-time
             cur_close = df_hist.iloc[-1]['close']
             ma20 = df_hist.iloc[-1]['MA20']
             cur_vol = df_hist.iloc[-1]['volume']
@@ -237,7 +301,7 @@ with t5:
             advances = len(df_100[df_100['%'] > 0])
             declines = len(df_100[df_100['%'] < 0])
 
-            # THUẬT TOÁN CHẤM ĐIỂM KỊCH BẢN (SCORE: 0 -> 3)
+            # THUẬT TOÁN CHẤM ĐIỂM (SCORE: 0 -> 3)
             score = 0
             if cur_close > ma20: score += 1
             if cur_vol > vol_ma20: score += 1
@@ -276,4 +340,40 @@ with t5:
                 fig_p = go.Figure()
                 fig_p.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['close'], name='VN-INDEX', line=dict(color='white', width=2)))
                 fig_p.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['MA20'], name='MA20', line=dict(color=C_GREEN, width=1, dash='dash')))
-                fig_p.update_layout(height=400, plot_bgcolor='#1e1e2f', paper_bgcolor
+                
+                # Đã sửa lỗi đứt dòng cập nhật Layout
+                fig_p.update_layout(
+                    height=400, 
+                    plot_bgcolor='#1e1e2f', 
+                    paper_bgcolor='#1e1e2f', 
+                    font_color='white'
+                )
+                st.plotly_chart(fig_p, use_container_width=True)
+
+            elif tab5_option == "📊 Xu hướng Khối lượng":
+                st.markdown("### Phân tích Khối lượng Giao dịch")
+                st.info(f"Khối lượng phiên gần nhất: **{cur_vol:,.0f}** CP, {'VƯỢT' if cur_vol > vol_ma20 else 'THẤP HƠN'} mức trung bình 20 phiên ({vol_ma20:,.0f}).")
+                fig_v = go.Figure()
+                c_vol = [C_GREEN if df_hist['close'].iloc[i] > df_hist['close'].iloc[i-1] else C_RED for i in range(1, len(df_hist))]
+                c_vol.insert(0, C_GREEN)
+                fig_v.add_trace(go.Bar(x=df_hist['time'], y=df_hist['volume'], name='Khối lượng', marker_color=c_vol))
+                fig_v.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['Vol_MA20'], name='Trung bình 20 phiên', line=dict(color='#ffaa00', width=2)))
+                
+                # Đã sửa lỗi đứt dòng cập nhật Layout
+                fig_v.update_layout(
+                    height=400, 
+                    plot_bgcolor='#1e1e2f', 
+                    paper_bgcolor='#1e1e2f', 
+                    font_color='white'
+                )
+                st.plotly_chart(fig_v, use_container_width=True)
+
+            elif tab5_option == "⚖️ Cung - Cầu":
+                st.markdown("### Đánh giá Cung - Cầu (Rổ Top 100)")
+                st.markdown(f"""
+                <div class="scenario-card" style="text-align: center;">
+                    <h4>Độ rộng thị trường</h4>
+                    <h1 style='color: {C_GREEN}; display: inline;'>{advances} Mã Tăng</h1> <h1 style='color: gray; display: inline;'> | </h1> <h1 style='color: {C_RED}; display: inline;'>{declines} Mã Giảm</h1>
+                    <p style="margin-top: 15px; font-size: 18px;">Dòng tiền đang <b>{'Kéo giá lên (Cầu > Cung)' if advances > declines else 'Chốt lời/Bán tháo (Cung > Cầu)'}</b> rõ rệt.</p>
+                </div>
+                """, unsafe_allow_html=True)
