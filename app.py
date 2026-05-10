@@ -217,4 +217,51 @@ with t5:
             trend_color = C_GREEN if is_uptrend else C_RED
             trend_txt = "TÍCH CỰC" if is_uptrend else "TIÊU CỰC"
 
-            if tab5_option == "🔮 Chiến
+            if tab5_option == "🔮 Chiến lược What-if":
+                prob_up = "55 - 65%" if is_uptrend else "15 - 25%"
+                prob_down = "15 - 25%" if is_uptrend else "55 - 65%"
+                
+                st.markdown(f"""
+                <div class="scenario-card">
+                    <div class="scenario-title">Dự báo & Chiến lược Giao dịch (Tự động cập nhật)</div>
+                    <p>Hệ thống kỹ thuật đánh giá xu hướng ngắn hạn hiện tại: <b style='color:{trend_color}'>{trend_txt}</b> (VN-INDEX = {cur_close:,.2f} so với MA20 = {ma20:,.2f}).</p>
+                    <hr style="border-color: #3f3f5a;">
+                    <div class="scenario-item"><p>🟢 <b>Kịch bản Tích cực</b> (Tiếp diễn đà tăng) - Xác suất <span class="prob-badge">{prob_up}</span></p><p>Giá giữ vững trên mốc MA20 ({ma20:,.0f}), dòng tiền lan tỏa sang Midcap.</p><p><b>Hành động:</b> Gia tăng tỷ trọng cổ phiếu, nắm giữ mã đang hút tiền.</p></div>
+                    <hr style="border-color: #3f3f5a;">
+                    <div class="scenario-item"><p>🟡 <b>Kịch bản Trung tính</b> (Sideway tích lũy) - Xác suất <span class="prob-badge">20 - 30%</span></p><p>Giá dao động đi ngang quanh mốc {cur_close:,.0f} biên độ hẹp, thanh khoản thấp.</p><p><b>Hành động:</b> Duy trì tỷ trọng 50% CP / 50% Tiền, giao dịch biên.</p></div>
+                    <hr style="border-color: #3f3f5a;">
+                    <div class="scenario-item"><p>🔴 <b>Kịch bản Tiêu cực</b> (Phá vỡ hỗ trợ) - Xác suất <span class="prob-badge">{prob_down}</span></p><p>Đánh mất mốc {ma20:,.0f} khối lượng lớn, áp lực bán lan rộng.</p><p><b>Hành động:</b> Hạ tỷ trọng margin ngay lập tức, phòng thủ.</p></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            elif tab5_option == "📈 Xu hướng Giá":
+                st.markdown("### Phân tích Xu hướng Giá VN-INDEX")
+                st.info(f"VN-INDEX hiện đang ở mức **{cur_close:,.2f}**, {'NẰM TRÊN' if is_uptrend else 'NẰM DƯỚI'} đường trung bình 20 ngày (MA20: {ma20:,.2f}).")
+                fig_p = go.Figure()
+                fig_p.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['close'], name='VN-INDEX', line=dict(color='white', width=2)))
+                fig_p.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['MA20'], name='MA20', line=dict(color=C_GREEN, width=1, dash='dash')))
+                fig_p.update_layout(height=400, plot_bgcolor='#1e1e2f', paper_bgcolor='#1e1e2f', font_color='white')
+                st.plotly_chart(fig_p, use_container_width=True)
+
+            elif tab5_option == "📊 Xu hướng Khối lượng":
+                vol_t, vol_ma = df_hist.iloc[-1]['volume'], df_hist.iloc[-1]['Vol_MA20']
+                st.markdown("### Phân tích Khối lượng Giao dịch")
+                st.info(f"Khối lượng phiên gần nhất: **{vol_t:,.0f}** CP, {'VƯỢT' if vol_t > vol_ma else 'THẤP HƠN'} mức trung bình 20 phiên ({vol_ma:,.0f}).")
+                fig_v = go.Figure()
+                c_vol = [C_GREEN if df_hist['close'].iloc[i] > df_hist['close'].iloc[i-1] else C_RED for i in range(1, len(df_hist))]
+                c_vol.insert(0, C_GREEN)
+                fig_v.add_trace(go.Bar(x=df_hist['time'], y=df_hist['volume'], name='Khối lượng', marker_color=c_vol))
+                fig_v.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['Vol_MA20'], name='Trung bình 20 phiên', line=dict(color='#ffaa00', width=2)))
+                fig_v.update_layout(height=400, plot_bgcolor='#1e1e2f', paper_bgcolor='#1e1e2f', font_color='white')
+                st.plotly_chart(fig_v, use_container_width=True)
+
+            elif tab5_option == "⚖️ Cung - Cầu":
+                st.markdown("### Đánh giá Cung - Cầu (Rổ Top 100)")
+                adv, dec = len(df_100[df_100['%'] > 0]), len(df_100[df_100['%'] < 0])
+                st.markdown(f"""
+                <div class="scenario-card" style="text-align: center;">
+                    <h4>Độ rộng thị trường</h4>
+                    <h1 style='color: {C_GREEN}; display: inline;'>{adv} Mã Tăng</h1> <h1 style='color: gray; display: inline;'> | </h1> <h1 style='color: {C_RED}; display: inline;'>{dec} Mã Giảm</h1>
+                    <p style="margin-top: 15px; font-size: 18px;">Dòng tiền đang tập trung <b>{'kéo thị trường đi lên' if adv > dec else 'chốt lời/thoát hàng'}</b> rõ rệt.</p>
+                </div>
+                """, unsafe_allow_html=True)
