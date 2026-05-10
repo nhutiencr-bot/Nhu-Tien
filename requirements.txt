@@ -1,7 +1,5 @@
 streamlit
 pandas
-vnstock
-vnstock3
 plotly
 requests
 beautifulsoup4
