@@ -1,35 +1,47 @@
 import streamlit as st, pandas as pd, plotly.express as px, plotly.graph_objects as go
 import yfinance as yf, requests, re
+from datetime import datetime
 
 # 1. CÀI ĐẶT GIAO DIỆN
 st.set_page_config(page_title="Fairy Invest", layout="wide")
 st.markdown("<style>div[data-testid='stMetric'], .card {background: #1e1e2f; padding: 15px; border-radius: 10px; color: white;} .card{border-left:5px solid #ffaa00; margin-top:10px;}</style>", unsafe_allow_html=True)
 
-c1, c2 = st.columns([4, 1])
-c1.title("🧚‍♀️ FAIRY INVEST")
-if c2.button("🔄 Cập nhật Web"): st.cache_data.clear()
+col1, col2 = st.columns([4, 1])
+col1.title("🧚‍♀️ FAIRY INVEST")
+if col2.button("🔄 Khôi phục hệ thống", use_container_width=True): st.cache_data.clear()
 
-# 2. LẤY DỮ LIỆU (YAHOO + TCBS + CAFEF)
+# 2. HÀM TẠO DỮ LIỆU CHỐNG TRẮNG TRANG (MOCK DATA)
+def get_mock_100():
+    return pd.DataFrame([{'Mã CK': 'FPT', 'Giá': 135.0, '+/-': 2.5, '%': 1.8, 'KL': 4500000}, {'Mã CK': 'HPG', 'Giá': 29.5, '+/-': -0.3, '%': -1.0, 'KL': 15000000}, {'Mã CK': 'SSI', 'Giá': 36.2, '+/-': 0.8, '%': 2.2, 'KL': 8000000}])
+
+def get_mock_idx():
+    dates = pd.date_range(end=datetime.now(), periods=20, freq='B')
+    df = pd.DataFrame({'time': dates, 'close': [1250]*20, 'volume': [500000000]*20})
+    df['MA20'], df['V_MA20'] = 1250, 500000000
+    return df
+
+# 3. LẤY DỮ LIỆU TỪ MẠNG (KÈM BẢO VỆ)
 @st.cache_data(ttl=120)
 def get_tcbs():
     try:
-        d = requests.get("https://apipubaws.tcbs.com.vn/stock-insight/v1/stock/second-board-market-watch?market=HOSE", headers={'User-Agent': 'Mozilla'}, timeout=5).json()['data']
-        return pd.DataFrame(d)[['ticker', 'price', 'priceChange', 'percentPriceChange', 'volume']].rename(columns={'ticker':'Mã CK', 'price':'Giá', 'priceChange':'+/-', 'percentPriceChange':'%', 'volume':'KL'}).sort_values('KL', ascending=False).head(100)
-    except: return pd.DataFrame()
+        d = requests.get("https://apipubaws.tcbs.com.vn/stock-insight/v1/stock/second-board-market-watch?market=HOSE", headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).json()['data']
+        return pd.DataFrame(d)[['ticker', 'price', 'priceChange', 'percentPriceChange', 'volume']].rename(columns={'ticker':'Mã CK', 'price':'Giá', 'priceChange':'+/-', 'percentPriceChange':'%', 'volume':'KL'}).sort_values('KL', ascending=False).head(100), False
+    except: return get_mock_100(), True # Trả về Mock Data nếu bị chặn
 
 @st.cache_data(ttl=300)
 def get_yf():
     try:
-        df = yf.Ticker("^VNINDEX").history(period="2mo").reset_index().rename(columns={'Date':'time', 'Close':'close', 'Volume':'volume'})
+        df = yf.Ticker("^VNINDEX").history(period="1mo").reset_index().rename(columns={'Date':'time', 'Close':'close', 'Volume':'volume'})
+        if df.empty: return get_mock_idx(), True
         df['MA20'], df['V_MA20'] = df['close'].rolling(20).mean(), df['volume'].rolling(20).mean()
-        return df.dropna()
-    except: return pd.DataFrame()
+        return df.dropna(), False
+    except: return get_mock_idx(), True
 
 @st.cache_data(ttl=3600)
 def get_cafef():
     res = []
     try:
-        h = requests.get("https://s.cafef.vn/ajax/KhuyenNghi_Update.aspx?PageIndex=1&PageSize=30", headers={"User-Agent":"Mozilla"}).text
+        h = requests.get("https://s.cafef.vn/ajax/KhuyenNghi_Update.aspx?PageIndex=1&PageSize=10", headers={"User-Agent":"Mozilla/5.0"}, timeout=5).text
         for b in re.findall(r'<li.*?>(.*?)</li>', h, re.DOTALL):
             t_m, l_m = re.search(r'<a[^>]*class="doc_title"[^>]*>(.*?)</a>', b), re.search(r'href="(/Report/Download\.aspx\?id=[^"]+)"', b)
             if t_m and l_m:
@@ -38,28 +50,36 @@ def get_cafef():
     except: pass
     return pd.DataFrame(res)
 
-# 3. HIỂN THỊ
-with st.spinner("Đang tải dữ liệu..."):
-    d_100, d_idx, d_rep = get_tcbs(), get_yf(), get_cafef()
+# 4. HIỂN THỊ
+d_100, err_tcbs = get_tcbs()
+d_idx, err_yf = get_yf()
+d_rep = get_cafef()
+
+if err_tcbs or err_yf:
+    st.error("⚠️ Máy chủ Streamlit Cloud đang bị Tường lửa Việt Nam chặn IP. Đang hiển thị Dữ liệu Mô phỏng để web không bị trắng. Để lấy dữ liệu thật, hãy tải code về chạy trên máy tính cá nhân.")
 
 t1, t2, t3, t4, t5 = st.tabs(["📈 Chỉ số", "🗺️ Dòng tiền", "📊 Top 100", "📝 Báo cáo", "🔮 AI What-if"])
 
 with t1:
     if not d_idx.empty:
-        c, p, dt = d_idx.iloc[-1]['close'], d_idx.iloc[-2]['close'], d_idx.iloc[-1]['time'].strftime('%d/%m/%Y')
-        st.metric(f"VN-INDEX ({dt})", f"{c:,.2f}", f"{c-p:+,.2f} ({(c-p)/p*100:+.2f}%)")
+        c, p = d_idx.iloc[-1]['close'], d_idx.iloc[-2]['close']
+        st.metric(f"VN-INDEX", f"{c:,.2f}", f"{c-p:+,.2f} ({(c-p)/p*100:+.2f}%)")
         st.plotly_chart(go.Figure([go.Scatter(x=d_idx['time'], y=d_idx['close'], name='VNINDEX'), go.Scatter(x=d_idx['time'], y=d_idx['MA20'], name='MA20', line=dict(dash='dash', color='#00e676'))]).update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0)), use_container_width=True)
+    else: st.warning("Không có dữ liệu Chỉ số")
 
 with t2:
     if not d_100.empty: st.plotly_chart(px.treemap(d_100, path=[px.Constant("HOSE"), 'Mã CK'], values='KL', color='%', color_continuous_scale=[[0, '#00e5ff'], [0.5, '#f5b041'], [1, '#cc00ff']], range_color=[-7, 7]).update_layout(margin=dict(l=0,r=0,t=0,b=0)), use_container_width=True)
+    else: st.warning("Không có dữ liệu Dòng tiền")
 
 with t3:
     if not d_100.empty: st.dataframe(d_100.style.format({'Giá': '{:,.2f}', '+/-': '{:+,.2f}', '%': '{:+,.2f}%', 'KL': '{:,.0f}'}).map(lambda v: f'color: {"#00e676" if v>0 else "#ff4d4d" if v<0 else "#f5b041"}', subset=['%']), hide_index=True, use_container_width=True)
+    else: st.warning("Không có dữ liệu Top 100")
 
 with t4:
     if not d_rep.empty:
         if not d_100.empty: d_rep = pd.merge(d_rep, d_100[['Mã CK', 'Giá']], on='Mã CK', how='left')
         st.dataframe(d_rep.style.map(lambda v: f'color: {"#00e676" if "MUA" in str(v).upper() else "#ff4d4d" if "BÁN" in str(v).upper() else "#f5b041"}; font-weight:bold;', subset=['Khuyến nghị']), column_config={"Link": st.column_config.LinkColumn("Tải về")}, hide_index=True, use_container_width=True)
+    else: st.warning("Không lấy được dữ liệu Báo cáo do chặn IP")
 
 with t5:
     if not d_idx.empty and not d_100.empty:
