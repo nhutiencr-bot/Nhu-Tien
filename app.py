@@ -1,53 +1,44 @@
 import streamlit as st, pandas as pd, plotly.express as px, plotly.graph_objects as go
-from vnstock import *
-from datetime import datetime, timedelta
-import pytz, requests, re, concurrent.futures
+import yfinance as yf
+import requests, re
 
 # 1. CÀI ĐẶT GIAO DIỆN
 st.set_page_config(page_title="Fairy Invest", layout="wide")
 st.markdown("""<style>div[data-testid="stMetric"], .card {background-color: #1e1e2f; padding: 15px; border-radius: 10px; color: white;} .card {border-left: 5px solid #ffaa00; margin-top: 10px;}</style>""", unsafe_allow_html=True)
 
-# 2. XỬ LÝ THỜI GIAN (Tự lùi ngày nếu cuối tuần)
-now = datetime.now(pytz.timezone('Asia/Ho_Chi_Minh'))
-t_date = now - timedelta(days=1) if now.weekday() == 5 else now - timedelta(days=2) if now.weekday() == 6 else now
-end_dt = t_date.strftime('%Y-%m-%d')
-st_stock, st_idx, st_hist = (t_date-timedelta(days=7)).strftime('%Y-%m-%d'), (t_date-timedelta(days=5)).strftime('%Y-%m-%d'), (t_date-timedelta(days=60)).strftime('%Y-%m-%d')
-
 C_GN, C_RD, C_RF = '#00e676', '#ff4d4d', '#f5b041'
 col1, col2 = st.columns([4, 1])
 col1.title("🧚‍♀️ FAIRY INVEST - Dashboard")
-if col2.button("🔄 Cập nhật", use_container_width=True): st.cache_data.clear()
+if col2.button("🔄 Cập nhật Dữ liệu", use_container_width=True): st.cache_data.clear()
 
-# 3. HÀM LẤY DỮ LIỆU CHUẨN GỐC
+# 2. HÀM LẤY DỮ LIỆU (Dùng Yahoo Finance + TCBS)
 @st.cache_data(ttl=120)
 def get_market():
+    # Lấy Top 100 từ TCBS (Chỉ 1s, không tốn RAM)
     try:
-        tkrs = listing_companies()[listing_companies()['comGroupCode'] == 'HOSE']['ticker'].tolist()
-        def fetch(t):
-            try:
-                d = stock_historical_data(t, st_stock, end_dt, '1D', 'stock')
-                if len(d) < 2: return None
-                c, p = d.iloc[-1]['close'], d.iloc[-2]['close']
-                return {'Mã CK': t, 'Giá': c, '+/-': c-p, '%': (c-p)/p*100, 'KL': int(d.iloc[-1]['volume'])}
-            except: return None
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as exe: # Max 10 luồng để không lag
-            res = list(exe.map(fetch, tkrs))
-        return pd.DataFrame([r for r in res if r]).sort_values('KL', ascending=False).head(100)
+        d = requests.get("https://apipubaws.tcbs.com.vn/stock-insight/v1/stock/second-board-market-watch?market=HOSE", headers={'User-Agent': 'Mozilla'}, timeout=5).json()['data']
+        df = pd.DataFrame(d)[['ticker', 'price', 'priceChange', 'percentPriceChange', 'volume']]
+        df.columns = ['Mã CK', 'Giá', '+/-', '%', 'KL']
+        return df.sort_values('KL', ascending=False).head(100)
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def get_hist():
+    # Lấy VN-INDEX từ Yahoo Finance (Bất tử cuối tuần/ban đêm)
     try:
-        df = stock_historical_data('VNINDEX', st_hist, end_dt, '1D', 'index')
+        df = yf.Ticker("^VNINDEX").history(period="3mo").reset_index()
+        if df.empty: return pd.DataFrame()
+        df = df.rename(columns={'Date': 'time', 'Close': 'close', 'Volume': 'volume'})
         df['MA20'], df['V_MA20'] = df['close'].rolling(20).mean(), df['volume'].rolling(20).mean()
         return df.dropna().reset_index(drop=True)
     except: return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def get_cafef():
+    # Lấy báo cáo từ CafeF
     res = []
     try:
-        html = requests.get("https://s.cafef.vn/ajax/KhuyenNghi_Update.aspx?PageIndex=1&PageSize=30", headers={"User-Agent":"Mozilla/5.0"}).text
+        html = requests.get("https://s.cafef.vn/ajax/KhuyenNghi_Update.aspx?PageIndex=1&PageSize=30", headers={"User-Agent":"Mozilla"}).text
         for b in re.findall(r'<li.*?>(.*?)</li>', html, re.DOTALL):
             t_m = re.search(r'<a[^>]*class="doc_title"[^>]*>(.*?)</a>', b)
             l_m = re.search(r'href="(/Report/Download\.aspx\?id=[^"]+)"', b)
@@ -61,8 +52,8 @@ def get_cafef():
     except: pass
     return pd.DataFrame(res)
 
-# 4. HIỂN THỊ 5 TAB
-with st.spinner("Đang tải dữ liệu..."):
+# 3. HIỂN THỊ 5 TAB GIAO DIỆN
+with st.spinner("Đang tải dữ liệu từ Yahoo & TCBS..."):
     df_100, df_hist, df_rep = get_market(), get_hist(), get_cafef()
 
 t1, t2, t3, t4, t5 = st.tabs(["📈 Chỉ số", "🗺️ Dòng tiền", "📊 Top 100", "📝 Báo cáo", "🔮 Kịch bản AI"])
@@ -70,14 +61,16 @@ t1, t2, t3, t4, t5 = st.tabs(["📈 Chỉ số", "🗺️ Dòng tiền", "📊 T
 with t1:
     if not df_hist.empty:
         c, p = df_hist.iloc[-1]['close'], df_hist.iloc[-2]['close']
-        st.metric(f"VN-INDEX ({end_dt})", f"{c:,.2f}", f"{c-p:+,.2f} ({(c-p)/p*100:+.2f}%)")
-        fig = go.Figure([go.Scatter(x=df_hist['time'], y=df_hist['close'], name='VN-INDEX'), go.Scatter(x=df_hist['time'], y=df_hist['MA20'], name='MA20')])
-        fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0))
+        dt_str = df_hist.iloc[-1]['time'].strftime('%d/%m/%Y')
+        st.metric(f"VN-INDEX (Chốt phiên {dt_str})", f"{c:,.2f}", f"{c-p:+,.2f} ({(c-p)/p*100:+.2f}%)")
+        fig = go.Figure([go.Scatter(x=df_hist['time'], y=df_hist['close'], name='VN-INDEX', line=dict(color='white')), go.Scatter(x=df_hist['time'], y=df_hist['MA20'], name='MA20', line=dict(color=C_GN, dash='dash'))])
+        fig.update_layout(height=400, margin=dict(l=0,r=0,t=0,b=0), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color='white')
         st.plotly_chart(fig, use_container_width=True)
 
 with t2:
     if not df_100.empty:
         fig_m = px.treemap(df_100, path=[px.Constant("HOSE"), 'Mã CK'], values='KL', color='%', color_continuous_scale=[[0, '#00e5ff'], [0.5, C_RF], [1, '#cc00ff']], range_color=[-7, 7])
+        fig_m.update_layout(margin=dict(l=0,r=0,t=0,b=0))
         st.plotly_chart(fig_m, use_container_width=True)
 
 with t3:
@@ -87,7 +80,7 @@ with t3:
 with t4:
     if not df_rep.empty:
         if not df_100.empty: df_rep = pd.merge(df_rep, df_100[['Mã CK', 'Giá']], on='Mã CK', how='left')
-        st.dataframe(df_rep.style.map(lambda v: f'color: {C_GN if "MUA" in str(v).upper() else C_RD if "BÁN" in str(v).upper() else C_RF}; font-weight:bold;', subset=['Khuyến nghị']), column_config={"Link": st.column_config.LinkColumn("Tài liệu", display_text="📥 PDF")}, hide_index=True, use_container_width=True)
+        st.dataframe(df_rep.style.map(lambda v: f'color: {C_GN if "MUA" in str(v).upper() else C_RD if "BÁN" in str(v).upper() else C_RF}; font-weight:bold;', subset=['Khuyến nghị']).format({'Giá': '{:,.2f}'}), column_config={"Link": st.column_config.LinkColumn("Tài liệu", display_text="📥 PDF")}, hide_index=True, use_container_width=True)
 
 with t5:
     if not df_hist.empty and not df_100.empty:
