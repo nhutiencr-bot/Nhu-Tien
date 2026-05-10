@@ -11,25 +11,41 @@ from bs4 import BeautifulSoup
 import re
 
 # ==========================================
-# 1. CÀI ĐẶT GIAO DIỆN & TIÊM CSS
+# 1. CÀI ĐẶT GIAO DIỆN & TIÊM CSS TÙY CHỈNH
 # ==========================================
 st.set_page_config(page_title="Fairy Invest", page_icon="🧚‍♀️", layout="wide")
 
 st.markdown("""
 <style>
+    /* Chỉnh thẻ Metric và Bảng */
     div[data-testid="stMetric"] { background-color: #f0f2f6; border-radius: 10px; padding: 15px; box-shadow: 2px 2px 10px rgba(0,0,0,0.05); }
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p { font-size: 18px; font-weight: 600; }
     div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
+    
+    /* Giao diện Tab 5 (Kịch bản) */
     .scenario-card { background-color: #1e1e2f; color: #ffffff; padding: 25px; border-radius: 15px; border-left: 5px solid #ffaa00; box-shadow: 0 4px 6px rgba(0,0,0,0.3); margin-bottom: 20px; }
     .scenario-title { color: #ffaa00; font-size: 22px; font-weight: bold; margin-bottom: 15px; }
     .prob-badge { background-color: #33334d; padding: 3px 8px; border-radius: 5px; font-weight: bold; color: #ffaa00; }
+    
+    /* BIẾN RADIO BUTTON CỦA STREAMLIT THÀNH MENU BÊN PHẢI TUYỆT ĐẸP */
+    div.row-widget.stRadio > div { flex-direction: column; gap: 10px; }
+    div.row-widget.stRadio > div > label {
+        background-color: #2a2a3c; color: white; padding: 12px 15px;
+        border-radius: 8px; border: 1px solid #3f3f5a;
+        cursor: pointer; transition: 0.3s; width: 100%; margin: 0;
+    }
+    div.row-widget.stRadio > div > label:hover { background-color: #3f3f5a; border-color: #ffaa00; }
+    /* Trạng thái được chọn */
+    div.row-widget.stRadio > div > label[data-checked="true"] { background-color: #ffaa00; color: #1e1e2f; font-weight: bold; border: none; }
+    /* Ẩn dấu chấm tròn mặc định của Radio */
+    div.row-widget.stRadio > div > label > div:first-child { display: none; }
+    div.row-widget.stRadio > div > label > div:nth-child(2) { font-size: 16px; margin-left: 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# Khởi tạo Session State cho Menu Tab 5
-if 'menu_tab5' not in st.session_state:
-    st.session_state.menu_tab5 = 'Chiến lược Giao dịch'
-
+# ==========================================
+# 2. THIẾT LẬP THỜI GIAN
+# ==========================================
 vn_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 now = datetime.now(vn_tz)
 end_date = now.strftime('%Y-%m-%d')
@@ -42,17 +58,19 @@ col_title, col_status = st.columns([3, 1])
 with col_title:
     st.title("🧚‍♀️ FAIRY INVEST - Dashboard")
 with col_status:
-    if is_trading:
-        st.success(f"🟢 ĐANG GIAO DỊCH | {now.strftime('%H:%M')}")
-    else:
-        st.warning(f"🔴 ĐÃ ĐÓNG CỬA | Phiên gần nhất")
+    if is_trading: st.success(f"🟢 ĐANG GIAO DỊCH | {now.strftime('%H:%M')}")
+    else: st.warning(f"🔴 ĐÃ ĐÓNG CỬA | Phiên gần nhất")
+    
+    if st.button("🔄 Cập nhật dữ liệu mới", use_container_width=True):
+        st.cache_data.clear()
+        st.toast("Đã làm mới dữ liệu!", icon="✅")
 
 C_CEIL, C_GREEN, C_REF = '#cc00ff', '#00e676', '#f5b041'
 C_RED, C_DRED, C_FLOOR = '#ff4d4d', '#b30000', '#00e5ff'
 MAP_COLORS = [[0.0, C_FLOOR], [0.014, C_FLOOR], [0.014, C_DRED], [0.285, C_DRED], [0.285, C_RED], [0.499, C_RED], [0.499, C_REF], [0.501, C_REF], [0.501, C_GREEN], [0.985, C_GREEN], [0.985, C_CEIL], [1.0, C_CEIL]]
 
 # ==========================================
-# CÁC HÀM LẤY DỮ LIỆU THỊ TRƯỜNG
+# 3. CÁC HÀM LẤY DỮ LIỆU TỐI ƯU
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_hose_tickers():
@@ -71,7 +89,8 @@ def get_market_data():
             curr, prev = d.iloc[-1]['close'], d.iloc[-2]['close']
             return {'Mã CK': t, 'Giá hiện tại': curr, '+/-': round(curr-prev, 2), '%': round((curr-prev)/prev*100, 2), 'Tổng KL': int(d.iloc[-1]['volume'])}
         except: return None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as exe:
+    # CHỐNG TRÀN RAM: Giảm luồng tải xuống mức 5
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exe:
         res = list(exe.map(fetch, tickers))
     df = pd.DataFrame([r for r in res if r])
     return df.sort_values('Tổng KL', ascending=False).head(100) if not df.empty else df
@@ -87,31 +106,29 @@ def get_index_contrib():
     except: pass
     return pd.DataFrame()
 
-@st.cache_data(ttl=3600)
-def get_cafef_reports():
+@st.cache_data(ttl=1800)
+def get_rss_reports():
+    # SỬ DỤNG NGUỒN RSS FEED: Không bao giờ bị chặn bởi tường lửa Cloudflare
     reports = []
     try:
-        url = "https://cafef.vn/du-lieu/phan-tich-bao-cao.chn"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
-        r.encoding = 'utf-8'
-        soup = BeautifulSoup(r.text, 'html.parser')
-        table = soup.find('table', {'id': 'tblGridData'})
-        if table:
-            for row in table.find_all('tr')[1:20]:
-                cols = row.find_all('td')
-                if len(cols) >= 5:
-                    title_tag = cols[3].find('a')
-                    title = title_tag.text.strip() if title_tag else cols[3].text.strip()
-                    reports.append({
-                        "Ngày": cols[0].text.strip(), "Mã CK": cols[1].text.strip(), "CTCK": cols[2].text.strip(),
-                        "Khuyến nghị": (re.search(r'(MUA|BÁN|NẮM GIỮ|KHẢ QUAN)', title, re.I) or re.search('', '')).group(0).upper() or "ĐÁNH GIÁ",
-                        "Giá mục tiêu": (re.search(r'mục tiêu.*?([\d,\.]+)', title, re.I) or re.search('', '')).group(1) or "N/A",
-                        "Tiêu đề Báo cáo": title, "Link PDF": "https://cafef.vn" + title_tag['href'] if title_tag and title_tag.has_attr('href') else "N/A"
-                    })
+        url = "https://vietstock.vn/rss/phan-tich-nhan-dinh.vi"
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.content, 'xml')
+        
+        for item in soup.find_all('item')[:30]:
+            title = item.title.text
+            link = item.link.text
+            pubDate = item.pubDate.text
+            
+            ticker_match = re.search(r'([A-Z0-9]{3})\s*:', title)
+            ticker = ticker_match.group(1) if ticker_match else "Thị trường"
+            action_match = re.search(r'(MUA|BÁN|NẮM GIỮ|KHẢ QUAN|KÉM KHẢ QUAN|TÍCH LŨY|TRUNG LẬP)', title, re.IGNORECASE)
+            action = action_match.group(1).upper() if action_match else "ĐÁNH GIÁ"
+            
+            reports.append({"Ngày": pubDate[5:16], "Mã CK": ticker, "Khuyến nghị": action, "Tiêu đề Báo cáo": title, "Link": link})
     except: pass
     return pd.DataFrame(reports)
 
-# Lấy dữ liệu VNINDEX dài hạn cho Tab 5
 @st.cache_data(ttl=300)
 def get_vnindex_history():
     try:
@@ -123,12 +140,12 @@ def get_vnindex_history():
     except: return pd.DataFrame()
 
 # ==========================================
-# HIỂN THỊ GIAO DIỆN
+# 4. GIAO DIỆN CHÍNH
 # ==========================================
 df_100 = get_market_data()
-t1, t2, t3, t4, t5 = st.tabs(["📈 VN-INDEX & Đóng góp", "🗺️ Bản đồ Dòng tiền", "📊 Top 100 Cổ phiếu", "📝 Khuyến Nghị CTCK", "🔮 Kịch bản Thị trường"])
+t1, t2, t3, t4, t5 = st.tabs(["📈 VN-INDEX & Đóng góp", "🗺️ Bản đồ Dòng tiền", "📊 Top 100 Cổ phiếu", "📝 Khuyến Nghị CTCK", "🔮 Chiến lược Giao dịch"])
 
-# --- TAB 1, 2, 3, 4 (RÚT GỌN ĐỂ TẬP TRUNG TAB 5) ---
+# --- TAB 1, 2, 3 ---
 with t1:
     try:
         df_daily = stock_historical_data('VNINDEX', start_index, end_date, '1D', 'index')
@@ -171,121 +188,33 @@ with t3:
         def style_v(v): return f'color: {C_CEIL if v>=6.8 else C_FLOOR if v<=-6.8 else C_GREEN if v>0 else C_RED if v<0 else C_REF}; font-weight: bold;'
         st.dataframe(df_100.style.format({'Giá hiện tại': '{:,.2f}', '+/-': '{:+,.2f}', '%': '{:+,.2f}%', 'Tổng KL': '{:,.0f}'}).map(style_v, subset=['+/-', '%']), use_container_width=True)
 
+# --- TAB 4: BÁO CÁO PHÂN TÍCH (RSS FEED - KHÔNG BAO GIỜ LỖI) ---
 with t4:
-    st.markdown("### 📝 Tổng hợp Báo Cáo Phân Tích (CafeF)")
-    df_rep = get_cafef_reports()
-    if not df_rep.empty and not df_100.empty:
-        df_rep = pd.merge(df_rep, df_100[['Mã CK', 'Giá hiện tại']], on='Mã CK', how='left')[['Ngày', 'Mã CK', 'CTCK', 'Khuyến nghị', 'Giá hiện tại', 'Giá mục tiêu', 'Tiêu đề Báo cáo', 'Link PDF']]
+    st.markdown("### 📝 Báo Cáo & Nhận Định (Nguồn: Vietstock)")
+    df_rep = get_rss_reports()
+    if not df_rep.empty:
         def s_act(val): return f'color: {C_GREEN if "MUA" in str(val) or "KHẢ" in str(val) else C_RED if "BÁN" in str(val) else C_REF}; font-weight: bold;'
-        st.dataframe(df_rep.style.map(s_act, subset=['Khuyến nghị']).format({'Giá hiện tại': '{:,.2f}'}), column_config={"Link PDF": st.column_config.LinkColumn("Tài liệu")}, use_container_width=True)
+        st.dataframe(df_rep.style.map(s_act, subset=['Khuyến nghị']), column_config={"Link": st.column_config.LinkColumn("Tài liệu", display_text="🔗 Xem bài")}, use_container_width=True, hide_index=True, height=600)
+    else: st.warning("Đang tải dữ liệu tin tức...")
 
-
-# ==========================================
-# TAB 5: KỊCH BẢN THỊ TRƯỜNG (CÓ TƯƠNG TÁC)
-# ==========================================
+# --- TAB 5: CHIẾN LƯỢC GIAO DỊCH (TƯƠNG TÁC THẬT) ---
 with t5:
     col_content, col_menu = st.columns([7, 3])
     df_hist = get_vnindex_history()
     
-    # -- CỘT MENU BÊN PHẢI (CÁC NÚT BẤM STREAMLIT NATIVE) --
     with col_menu:
         st.markdown("<h4 style='color: white;'>📑 Menu Phân Tích</h4>", unsafe_allow_html=True)
-        # Sử dụng Radio button nhưng ẩn label để giả làm menu điều hướng
-        selected_menu = st.radio(
-            "Chọn chức năng:",
-            ["🔮 Chiến lược Giao dịch", "📈 Xu hướng Giá", "📊 Xu hướng Khối lượng", "⚖️ Cung - Cầu"],
-            label_visibility="collapsed"
-        )
-        st.session_state.menu_tab5 = selected_menu
+        # Khai báo Radio button thực sự để bắt sự kiện click
+        tab5_option = st.radio("Chọn chức năng:", ["🔮 Chiến lược What-if", "📈 Xu hướng Giá", "📊 Xu hướng Khối lượng", "⚖️ Cung - Cầu"], label_visibility="collapsed")
 
-    # -- CỘT NỘI DUNG BÊN TRÁI --
     with col_content:
-        if df_hist.empty:
-            st.warning("Đang tải dữ liệu phân tích...")
+        if df_hist.empty or df_100.empty:
+            st.warning("Đang kết nối dữ liệu phân tích...")
         else:
-            # Lấy thông số Real-time để làm Kịch bản Dynamic
-            current_close = df_hist.iloc[-1]['close']
+            cur_close = df_hist.iloc[-1]['close']
             ma20 = df_hist.iloc[-1]['MA20']
-            vol_today = df_hist.iloc[-1]['volume']
-            vol_ma20 = df_hist.iloc[-1]['Vol_MA20']
-            
-            # Tính toán xu hướng
-            is_uptrend = current_close > ma20
-            trend_text = "TÍCH CỰC" if is_uptrend else "TIÊU CỰC"
+            is_uptrend = cur_close > ma20
             trend_color = C_GREEN if is_uptrend else C_RED
-            
-            # 1. Nếu chọn Chiến lược giao dịch (What-if)
-            if st.session_state.menu_tab5 == "🔮 Chiến lược Giao dịch":
-                # Thuật toán tự động đẩy xác suất dựa trên đường MA20
-                prob_up = "55 - 65%" if is_uptrend else "15 - 25%"
-                prob_down = "15 - 25%" if is_uptrend else "55 - 65%"
-                
-                html_content = f"""
-                <div class="scenario-card">
-                    <div class="scenario-title">Dự báo & Chiến lược Giao dịch (Dynamic)</div>
-                    <p>Hệ thống đánh giá xu hướng ngắn hạn hiện tại đang: <b style='color:{trend_color}'>{trend_text}</b> (VN-INDEX = {current_close:,.2f} so với MA20 = {ma20:,.2f}).</p>
-                    <hr style="border-color: #3f3f5a;">
-                    
-                    <div class="scenario-item">
-                        <p>🟢 <b>Kịch bản Tích cực</b> (Tiếp diễn đà tăng) - Xác suất <span class="prob-badge">{prob_up}</span></p>
-                        <p>Giá giữ vững trên mốc MA20 ({ma20:,.0f}), dòng tiền lan tỏa sang Midcap.</p>
-                        <p><b>Hành động:</b> Gia tăng tỷ trọng cổ phiếu, nắm giữ các mã đang hút tiền.</p>
-                    </div>
-                    
-                    <hr style="border-color: #3f3f5a;">
-                    <div class="scenario-item">
-                        <p>🟡 <b>Kịch bản Trung tính</b> (Sideway tích lũy) - Xác suất <span class="prob-badge">20 - 30%</span></p>
-                        <p>Giá dao động đi ngang quanh trục {current_close:,.0f} biên độ hẹp, thanh khoản thấp.</p>
-                        <p><b>Hành động:</b> Duy trì tỷ trọng 50% Cổ phiếu / 50% Tiền mặt, giao dịch biên (Mua hỗ trợ, Bán kháng cự).</p>
-                    </div>
-                    
-                    <hr style="border-color: #3f3f5a;">
-                    <div class="scenario-item">
-                        <p>🔴 <b>Kịch bản Tiêu cực</b> (Phá vỡ hỗ trợ) - Xác suất <span class="prob-badge">{prob_down}</span></p>
-                        <p>Đánh mất mốc {ma20:,.0f} với khối lượng lớn, áp lực bán lan rộng toàn thị trường.</p>
-                        <p><b>Hành động:</b> Hạ tỷ trọng margin ngay lập tức, đưa tài khoản về thế phòng thủ.</p>
-                    </div>
-                </div>
-                """
-                st.markdown(html_content, unsafe_allow_html=True)
+            trend_txt = "TÍCH CỰC" if is_uptrend else "TIÊU CỰC"
 
-            # 2. Nếu chọn Xu hướng Giá
-            elif st.session_state.menu_tab5 == "📈 Xu hướng Giá":
-                st.markdown(f"### Phân tích Xu hướng Giá VN-INDEX")
-                st.info(f"VN-INDEX hiện tại đang ở mức **{current_close:,.2f}**, {'NẰM TRÊN' if is_uptrend else 'NẰM DƯỚI'} đường trung bình 20 ngày (MA20: {ma20:,.2f}).")
-                
-                # Vẽ biểu đồ Line chart có MA20
-                fig_price = go.Figure()
-                fig_price.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['close'], name='VN-INDEX', line=dict(color='white', width=2)))
-                fig_price.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['MA20'], name='MA20', line=dict(color=C_GREEN, width=1, dash='dash')))
-                fig_price.update_layout(height=400, plot_bgcolor='#1e1e2f', paper_bgcolor='#1e1e2f', font_color='white')
-                st.plotly_chart(fig_price, use_container_width=True)
-
-            # 3. Nếu chọn Xu hướng Khối lượng
-            elif st.session_state.menu_tab5 == "📊 Xu hướng Khối lượng":
-                vol_status = "VƯỢT" if vol_today > vol_ma20 else "THẤP HƠN"
-                st.markdown(f"### Phân tích Khối lượng Giao dịch")
-                st.info(f"Khối lượng phiên gần nhất đạt **{vol_today:,.0f}** cổ phiếu, {vol_status} mức trung bình 20 phiên ({vol_ma20:,.0f}).")
-                
-                # Vẽ Bar chart khối lượng
-                b_colors = [C_GREEN if df_hist['close'].iloc[i] > df_hist['close'].iloc[i-1] else C_RED for i in range(len(df_hist))]
-                fig_vol = go.Figure()
-                fig_vol.add_trace(go.Bar(x=df_hist['time'], y=df_hist['volume'], name='Khối lượng', marker_color=b_colors))
-                fig_vol.add_trace(go.Scatter(x=df_hist['time'], y=df_hist['Vol_MA20'], name='Trung bình 20 phiên', line=dict(color='#ffaa00', width=2)))
-                fig_vol.update_layout(height=400, plot_bgcolor='#1e1e2f', paper_bgcolor='#1e1e2f', font_color='white')
-                st.plotly_chart(fig_vol, use_container_width=True)
-                
-            # 4. Nếu chọn Cung Cầu
-            elif st.session_state.menu_tab5 == "⚖️ Cung - Cầu":
-                st.markdown(f"### Đánh giá Cung - Cầu Thị trường")
-                advances = len(df_100[df_100['%'] > 0])
-                declines = len(df_100[df_100['%'] < 0])
-                st.markdown(f"""
-                <div class="scenario-card" style="text-align: center;">
-                    <h4>Độ rộng thị trường (Trong rổ Top 100)</h4>
-                    <h2 style='color: {C_GREEN}; display: inline;'>{advances} Tăng</h2>
-                    <h2 style='color: gray; display: inline;'> | </h2>
-                    <h2 style='color: {C_RED}; display: inline;'>{declines} Giảm</h2>
-                    <p style="margin-top: 15px;">Dòng tiền đang tập trung {'kéo thị trường đi lên' if advances > declines else 'chốt lời/thoát hàng'} rõ rệt trong nhóm cổ phiếu vốn hóa lớn và thanh khoản cao.</p>
-                </div>
-                """, unsafe_allow_html=True)
+            if tab5_option == "🔮 Chiến
