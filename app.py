@@ -7,7 +7,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import urllib.parse
-import xml.etree.ElementTree as ET
+import re
+import concurrent.futures
 
 # ==========================================
 # 1. CÀI ĐẶT GIAO DIỆN & CSS
@@ -60,25 +61,21 @@ MAP_COLORS = [
     [0.9857, C_CEIL], [1.0, C_CEIL]              
 ]
 
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36'}
 
 # ==========================================
 # 3. LÕI DỮ LIỆU ĐỘT PHÁ: MẠNG PROXY ĐA TẦNG VƯỢT WAF
 # ==========================================
 @st.cache_data(ttl=30)
 def get_top_200_realtime():
-    """
-    Lấy Top 200 mã có GIÁ TRỊ GIAO DỊCH cao nhất 3 sàn (HOSE, HNX, UPCOM).
-    Đảm bảo 100% Real-time bằng cách dùng Proxy lách tường lửa Streamlit.
-    """
+    """ Dùng 3 mạng Proxy để lách tường lửa lấy Top 200 mã có GTGD cao nhất """
     url_target = "https://finfo-api.vndirect.com.vn/v4/stock_prices?sort=accumulatedVal~DESC&q=floor:HOSE,HNX,UPCOM&size=200"
     url_encoded = urllib.parse.quote(url_target, safe='')
     
-    # Chiến lược 1: Gọi trực tiếp
     urls_to_try = [
         url_target,
-        f"https://api.allorigins.win/raw?url={url_encoded}",  # Proxy 1
-        f"https://corsproxy.io/?{url_encoded}"                # Proxy 2
+        f"https://api.allorigins.win/raw?url={url_encoded}",
+        f"https://corsproxy.io/?{url_encoded}"
     ]
     
     for url in urls_to_try:
@@ -91,17 +88,29 @@ def get_top_200_realtime():
                     df.columns = ['Mã CK', 'Giá', '+/-', '%', 'Tổng KL', 'Tổng GT']
                     df[['Giá', '+/-', '%', 'Tổng KL', 'Tổng GT']] = df[['Giá', '+/-', '%', 'Tổng KL', 'Tổng GT']].apply(pd.to_numeric, errors='coerce')
                     return df.dropna(subset=['Tổng KL'])
-        except:
-            continue
+        except: continue
             
+    # Nếu Proxy vẫn chết, dùng SSI API
+    try:
+        r1 = requests.get("https://iboard-query.ssi.com.vn/v2/stock/exchange/hose", headers=HEADERS, timeout=5).json()
+        r2 = requests.get("https://iboard-query.ssi.com.vn/v2/stock/exchange/hnx", headers=HEADERS, timeout=5).json()
+        data = r1.get('data', []) + r2.get('data', [])
+        df = pd.DataFrame(data)[['stockSymbol', 'matchedPrice', 'priceChange', 'priceChangePercent', 'nmTotalTradedQty']]
+        df.columns = ['Mã CK', 'Giá', '+/-', '%', 'Tổng KL']
+        df[['Giá', '+/-', '%', 'Tổng KL']] = df[['Giá', '+/-', '%', 'Tổng KL']].apply(pd.to_numeric, errors='coerce')
+        if df['Giá'].max() > 1000: df[['Giá', '+/-']] = df[['Giá', '+/-']] / 1000
+        df['Tổng GT'] = df['Giá'] * df['Tổng KL'] * 1000
+        return df.dropna(subset=['Tổng KL']).sort_values('Tổng GT', ascending=False).head(200)
+    except: pass
+    
     return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def get_index_contrib():
     url_target = "https://finfo-api.vndirect.com.vn/v4/index_events?q=code:VNINDEX&sort=point~DESC&size=30"
     url_encoded = urllib.parse.quote(url_target, safe='')
-    
     urls_to_try = [url_target, f"https://api.allorigins.win/raw?url={url_encoded}"]
+    
     for url in urls_to_try:
         try:
             res = requests.get(url, headers=HEADERS, timeout=5)
@@ -114,15 +123,21 @@ def get_index_contrib():
 
 @st.cache_data(ttl=120)
 def get_vnindex_live_and_ma():
-    # Lấy Giá VNINDEX Real-time từ VNDirect
     live_price, live_vol = 0, 0
-    try:
-        r = requests.get("https://finfo-api.vndirect.com.vn/v4/stock_prices?q=code:VNINDEX", headers=HEADERS, timeout=5).json()
-        live_price = float(r['data'][0]['matchPrice'])
-        live_vol = float(r['data'][0]['accumulatedVol'])
-    except: pass
+    url_target = "https://finfo-api.vndirect.com.vn/v4/stock_prices?q=code:VNINDEX"
+    url_encoded = urllib.parse.quote(url_target, safe='')
+    urls_to_try = [url_target, f"https://api.allorigins.win/raw?url={url_encoded}"]
     
-    # Tính MA20 từ vnstock
+    for url in urls_to_try:
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=5)
+            if r.status_code == 200:
+                data = r.json()['data'][0]
+                live_price, live_vol = float(data['matchPrice']), float(data['accumulatedVol'])
+                break
+        except: continue
+    
+    # Tính MA20 từ vnstock (Nguồn bất tử)
     try:
         df = stock_historical_data('VNINDEX', start_hist, end_date, '1D', 'index')
         if not df.empty:
@@ -141,25 +156,63 @@ def get_vnindex_live_and_ma():
     except: return None
     return None
 
-@st.cache_data(ttl=3600)
-def get_vnexpress_news():
+@st.cache_data(ttl=1800)
+def get_cafef_reports():
+    """ Lấy Khuyến nghị phân tích trực tiếp từ CafeF """
     res = []
     try:
-        xml_data = requests.get("https://vnexpress.net/rss/kinh-doanh/chung-khoan.rss", timeout=10).text
-        root = ET.fromstring(xml_data)
-        for item in root.findall('./channel/item')[:20]:
-            title, link, pubDate = item.find('title').text, item.find('link').text, item.find('pubDate').text
-            action = "TIN TỨC"
-            if any(k in title.lower() for k in ["tăng", "lãi", "hút", "vượt"]): action = "TÍCH CỰC"
-            elif any(k in title.lower() for k in ["giảm", "lỗ", "bán", "lao"]): action = "TIÊU CỰC"
-            res.append({"Ngày": pubDate[5:16], "Phân loại": action, "Tiêu đề": title, "Link": link})
+        url_target = "https://s.cafef.vn/ajax/KhuyenNghi_Update.aspx?PageIndex=1&PageSize=30"
+        url_encoded = urllib.parse.quote(url_target, safe='')
+        urls_to_try = [url_target, f"https://api.allorigins.win/raw?url={url_encoded}"]
+        
+        h = ""
+        for url in urls_to_try:
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=8)
+                if r.status_code == 200 and "<li" in r.text:
+                    h = r.text
+                    break
+            except: continue
+            
+        if h:
+            for b in re.findall(r'<li.*?>(.*?)</li>', h, re.DOTALL):
+                t_m = re.search(r'class="doc_title"[^>]*>(.*?)</a>', b)
+                l_m = re.search(r'href="(/Report/Download\.aspx\?id=[^"]+)"', b)
+                s_m = re.search(r'class="doc_source"[^>]*>(.*?)</span>', b)
+                d_m = re.search(r'class="doc_date"[^>]*>(.*?)</span>', b)
+                
+                if t_m and l_m:
+                    title = t_m.group(1).strip()
+                    link = "https://s.cafef.vn" + l_m.group(1)
+                    source = s_m.group(1).strip() if s_m else ""
+                    date_str = d_m.group(1).strip() if d_m else ""
+                    
+                    # Trích xuất Mã CK và Khuyến nghị
+                    tk_match = re.search(r'\b([A-Z0-9]{3})\b', title)
+                    ticker = tk_match.group(1) if tk_match else ""
+                    
+                    action = "ĐÁNH GIÁ"
+                    t_upper = title.upper()
+                    if any(w in t_upper for w in ["MUA", "BUY", "MỤC TIÊU"]): action = "MUA"
+                    elif any(w in t_upper for w in ["BÁN", "SELL"]): action = "BÁN"
+                    elif any(w in t_upper for w in ["NẮM GIỮ", "HOLD"]): action = "NẮM GIỮ"
+                    elif any(w in t_upper for w in ["KHẢ QUAN", "OUTPERFORM", "ADD"]): action = "KHẢ QUAN"
+                    
+                    res.append({
+                        "Ngày": date_str,
+                        "Mã CK": ticker,
+                        "Khuyến nghị": action,
+                        "CTCK": source,
+                        "Tiêu đề Báo cáo": title,
+                        "Link": link
+                    })
     except: pass
     return pd.DataFrame(res)
 
 # ==========================================
 # 4. GIAO DIỆN TABS
 # ==========================================
-with st.spinner("Đang kết nối Mạng Proxy lấy Top 200 Thanh Khoản Real-time..."):
+with st.spinner("Đang kết nối Mạng Proxy lấy Dữ liệu Real-time..."):
     df_200 = get_top_200_realtime()
     
     if not df_200.empty:
@@ -168,14 +221,14 @@ with st.spinner("Đang kết nối Mạng Proxy lấy Top 200 Thanh Khoản Real
         df_gainers = pd.DataFrame()
         
     idx_data = get_vnindex_live_and_ma()
-    df_reports = get_vnexpress_news()
+    df_reports = get_cafef_reports()
 
 t1, t2, t3, t4, t5, t6 = st.tabs([
     "📈 VN-INDEX & Tác động", 
     "🗺️ Bản đồ Dòng tiền", 
     "📊 Top 200 Giao Dịch", 
     "🚀 Top Tăng Mạnh", 
-    "📝 Tin Chứng khoán", 
+    "📝 Cập nhật Khuyến nghị", 
     "🔮 AI Kịch Bản"
 ])
 
@@ -195,18 +248,13 @@ def style_v(v):
 with t1:
     if idx_data:
         cur, prev = idx_data['close'], idx_data['prev']
-        st.metric(
-            f"Điểm số VN-INDEX (LIVE)", 
-            f"{cur:,.2f}", 
-            f"{cur-prev:+,.2f} ({((cur-prev)/prev*100):+,.2f}%)"
-        )
+        st.metric(f"Điểm số VN-INDEX (LIVE)", f"{cur:,.2f}", f"{cur-prev:+,.2f} ({((cur-prev)/prev*100):+,.2f}%)")
         st.divider()
         
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("#### 🌊 Thanh khoản (So với TBC 20 Phiên)")
-            v = idx_data['volume']
-            v_ma = idx_data['V_MA20']
+            v, v_ma = idx_data['volume'], idx_data['V_MA20']
             
             fig = go.Figure(go.Bar(
                 x=['Hôm nay (LIVE)', 'Trung bình 20 Phiên (MA20)'], 
@@ -238,80 +286,43 @@ with t1:
 with t2:
     if not df_200.empty:
         fig_m = px.treemap(
-            df_200, 
-            path=[px.Constant("Thị Trường"), 'Mã CK'], 
-            values='Tổng GT',  # Vẽ khối theo Giá trị giao dịch như yêu cầu
-            color='%', 
-            color_continuous_scale=MAP_COLORS, 
-            range_color=[-7, 7]
+            df_200, path=[px.Constant("Thị Trường"), 'Mã CK'], 
+            values='Tổng GT', color='%', 
+            color_continuous_scale=MAP_COLORS, range_color=[-7, 7]
         )
-        fig_m.update_traces(
-            texttemplate="<b>%{label}</b><br>%{customdata[0]:+.2f}%", 
-            customdata=df_200[['%', 'Tổng KL']]
-        )
+        fig_m.update_traces(texttemplate="<b>%{label}</b><br>%{customdata[0]:+.2f}%", customdata=df_200[['%', 'Tổng KL']])
         st.plotly_chart(fig_m.update_layout(height=650, margin=dict(t=10,l=0,r=0,b=0)), use_container_width=True)
     else: 
-        st.warning("Dữ liệu đang được tải, vui lòng bấm Cập nhật Live.")
+        st.warning("Tường lửa đang chặn dữ liệu. Hãy ấn nút [🔄 Cập nhật Live] để hệ thống đổi sang Mạng Proxy khác.")
 
 # TAB 3 & 4: BẢNG GIÁ
 with t3:
     if not df_200.empty:
         st.markdown("### 📊 Top 200 Cổ Phiếu Giao Dịch Mạnh Nhất Toàn Thị Trường")
-        st.dataframe(
-            df_200.style.format({
-                'Giá': '{:,.2f}', 
-                '+/-': '{:+,.2f}', 
-                '%': '{:+,.2f}%', 
-                'Tổng KL': '{:,.0f}',
-                'Tổng GT': '{:,.0f}'
-            }).map(style_v, subset=['+/-', '%']), 
-            use_container_width=True, 
-            hide_index=True, 
-            height=600
-        )
+        st.dataframe(df_200.style.format({'Giá': '{:,.2f}', '+/-': '{:+,.2f}', '%': '{:+,.2f}%', 'Tổng KL': '{:,.0f}', 'Tổng GT': '{:,.0f}'}).map(style_v, subset=['+/-', '%']), use_container_width=True, hide_index=True, height=600)
 
 with t4:
     if not df_gainers.empty:
         st.markdown("### 🚀 Top 10 Cổ Phiếu Tăng Mạnh Nhất")
-        st.dataframe(
-            df_gainers.style.format({
-                'Giá': '{:,.2f}', 
-                '+/-': '{:+,.2f}', 
-                '%': '{:+,.2f}%', 
-                'Tổng KL': '{:,.0f}',
-                'Tổng GT': '{:,.0f}'
-            }).map(style_v, subset=['+/-', '%']), 
-            use_container_width=True, 
-            hide_index=True, 
-            height=400
-        )
+        st.dataframe(df_gainers.style.format({'Giá': '{:,.2f}', '+/-': '{:+,.2f}', '%': '{:+,.2f}%', 'Tổng KL': '{:,.0f}', 'Tổng GT': '{:,.0f}'}).map(style_v, subset=['+/-', '%']), use_container_width=True, hide_index=True, height=400)
 
-# TAB 5: TIN TỨC
+# TAB 5: CẬP NHẬT KHUYẾN NGHỊ (CAFEF)
 with t5:
     if not df_reports.empty:
-        st.markdown("### 📝 Điểm Tin Thị Trường (VNExpress)")
+        st.markdown("### 📝 Cập Nhật Khuyến Nghị (Nguồn: CafeF)")
         st.dataframe(
-            df_reports.style.map(
-                lambda v: f'color: {C_GREEN if "TÍCH CỰC" in str(v) else C_RED if "TIÊU CỰC" in str(v) else C_REF}; font-weight:bold;', 
-                subset=['Phân loại']
-            ), 
-            column_config={"Link": st.column_config.LinkColumn("Đọc bài")}, 
-            hide_index=True, 
-            use_container_width=True, 
-            height=600
+            df_reports.style.map(lambda v: f'color: {C_GREEN if "MUA" in str(v) or "KHẢ QUAN" in str(v) else C_RED if "BÁN" in str(v) else C_REF}; font-weight:bold;', subset=['Khuyến nghị']), 
+            column_config={"Link": st.column_config.LinkColumn("Tải Báo cáo")}, 
+            hide_index=True, use_container_width=True, height=600
         )
+    else:
+        st.warning("Hệ thống chưa tải được bản tin khuyến nghị từ CafeF (CafeF đang chặn IP Mỹ).")
 
 # TAB 6: AI KỊCH BẢN
 with t6:
     if idx_data and not df_200.empty:
-        c = idx_data['close']
-        ma = idx_data['MA20']
-        v = idx_data['volume']
-        v_ma = idx_data['V_MA20']
-        
-        # Đếm thực tế Tăng / Giảm từ Top 200
-        adv = len(df_200[df_200['%'] > 0])
-        dec = len(df_200[df_200['%'] < 0])
+        c, ma, v, v_ma = idx_data['close'], idx_data['MA20'], idx_data['volume'], idx_data['V_MA20']
+        adv, dec = len(df_200[df_200['%'] > 0]), len(df_200[df_200['%'] < 0])
         
         ai_score = 0
         
@@ -358,12 +369,9 @@ with t6:
         """
         st.markdown(html_ai_status, unsafe_allow_html=True)
         
-        if ai_score >= 2:
-            sc_color, sc_title, sc_desc = C_GREEN, "🟢 Kịch Bản 1: Bứt phá đi lên (Khả năng cao nhất)", "Dòng tiền lan tỏa tốt. Gia tăng tỷ trọng cổ phiếu, tập trung nhóm đang hút dòng tiền (Màu Tím/Xanh đậm trên bản đồ nhiệt). Mở mua mới các mã có nền tích lũy."
-        elif ai_score == 1:
-            sc_color, sc_title, sc_desc = C_REF, "🟡 Kịch Bản 2: Đi ngang giằng co (Khả năng cao nhất)", "Thị trường phân hóa mạnh, kéo trụ xả midcap. Duy trì tỷ trọng 50/50. Tuyệt đối không FOMO giá xanh. Canh chốt lời ngắn hạn ở kháng cự."
-        else:
-            sc_color, sc_title, sc_desc = C_RED, "🔴 Kịch Bản 3: Điều chỉnh giảm (Khả năng cao nhất)", "Lực bán áp đảo, cầu suy yếu. Quản trị rủi ro đặt lên hàng đầu. Hạ tỷ trọng Margin về 0. Kiên quyết cắt lỗ các mã vi phạm hỗ trợ. Đứng ngoài quan sát."
+        if ai_score >= 2: sc_color, sc_title, sc_desc = C_GREEN, "🟢 Kịch Bản 1: Bứt phá đi lên (Khả năng cao nhất)", "Dòng tiền lan tỏa tốt. Gia tăng tỷ trọng cổ phiếu, tập trung nhóm đang hút dòng tiền (Màu Tím/Xanh đậm trên bản đồ nhiệt). Mở mua mới các mã có nền tích lũy."
+        elif ai_score == 1: sc_color, sc_title, sc_desc = C_REF, "🟡 Kịch Bản 2: Đi ngang giằng co (Khả năng cao nhất)", "Thị trường phân hóa mạnh, kéo trụ xả midcap. Duy trì tỷ trọng 50/50. Tuyệt đối không FOMO giá xanh. Canh chốt lời ngắn hạn ở kháng cự."
+        else: sc_color, sc_title, sc_desc = C_RED, "🔴 Kịch Bản 3: Điều chỉnh giảm (Khả năng cao nhất)", "Lực bán áp đảo, cầu suy yếu. Quản trị rủi ro đặt lên hàng đầu. Hạ tỷ trọng Margin về 0. Kiên quyết cắt lỗ các mã vi phạm hỗ trợ. Đứng ngoài quan sát."
 
         st.markdown(f"""
         <div class='scenario-box' style='background-color: rgba(255,255,255,0.05); border-left: 5px solid {sc_color};'>
