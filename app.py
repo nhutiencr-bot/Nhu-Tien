@@ -23,32 +23,24 @@ def get_live_data():
     # Giả lập 100% trình duyệt Chrome thật để không bị TCBS chặn IP
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Origin': 'https://tcinvest.tcbs.com.vn',
-        'Referer': 'https://tcinvest.tcbs.com.vn/'
+        'Accept': 'application/json, text/plain, */*'
     }
     
     try:
         # LẤY DỮ LIỆU TCBS
         res_tcbs = requests.get("https://apipubaws.tcbs.com.vn/stock-insight/v1/stock/second-board-market-watch?market=HOSE", headers=headers, timeout=10)
-        if res_tcbs.status_code == 200:
-            data_json = res_tcbs.json()
-            if 'data' in data_json:
-                df_board = pd.DataFrame(data_json['data'])[['ticker','price','priceChange','percentPriceChange','volume']].rename(columns={'ticker':'Mã CK','price':'Giá','priceChange':'+/-','percentPriceChange':'%','volume':'KL'}).sort_values('KL', ascending=False).head(100)
-            else:
-                st.error("❌ TCBS đổi cấu trúc dữ liệu, không tìm thấy mục 'data'.")
-        else:
-            st.error(f"❌ Máy chủ Streamlit bị TCBS chặn. Mã lỗi: {res_tcbs.status_code}")
+        if res_tcbs.status_code == 200 and 'data' in res_tcbs.json():
+            df_board = pd.DataFrame(res_tcbs.json()['data'])[['ticker','price','priceChange','percentPriceChange','volume']].rename(columns={'ticker':'Mã CK','price':'Giá','priceChange':'+/-','percentPriceChange':'%','volume':'KL'}).sort_values('KL', ascending=False).head(100)
 
         # LẤY CHỈ SỐ VN-INDEX TỪ DNSE (Nguồn ngầm của vnstock)
         e_t, s_t = int(now.timestamp()), int((now - timedelta(days=60)).timestamp())
         res_idx = requests.get(f"https://services.entrade.com.vn/chart-api/v2/ohlcs/index?ticker=VNINDEX&resolution=1D&from={s_t}&to={e_t}", headers=headers, timeout=10)
-        if res_idx.status_code == 200:
+        if res_idx.status_code == 200 and 't' in res_idx.json():
             d_idx = res_idx.json()
-            if 't' in d_idx:
-                df_idx = pd.DataFrame({'time': pd.to_datetime(d_idx['t'], unit='s', utc=True).dt.tz_convert('Asia/Ho_Chi_Minh'), 'close': d_idx['c'], 'volume': d_idx['v']})
-                df_idx['MA20'], df_idx['V_MA20'] = df_idx['close'].rolling(20).mean(), df_idx['volume'].rolling(20).mean()
-                df_idx = df_idx.dropna().reset_index(drop=True)
+            df_idx = pd.DataFrame({'time': pd.to_datetime(d_idx['t'], unit='s', utc=True).dt.tz_convert('Asia/Ho_Chi_Minh'), 'close': d_idx['c'], 'volume': d_idx['v']})
+            df_idx['MA20'] = df_idx['close'].rolling(20).mean()
+            df_idx['V_MA20'] = df_idx['volume'].rolling(20).mean()
+            df_idx = df_idx.dropna().reset_index(drop=True)
             
     except Exception as e:
         st.error(f"❌ Lỗi mạng gián đoạn: {e}")
@@ -58,7 +50,7 @@ def get_live_data():
 with st.spinner("Đang nạp dữ liệu Real-time từ Sàn..."):
     d_board, d_idx = get_live_data()
 
-# 3. HIỂN THỊ 4 TAB TINH GỌN
+# 3. HIỂN THỊ 4 TAB
 t1, t2, t3, t4 = st.tabs(["📈 Chỉ số", "🗺️ Dòng tiền", "📊 Top 100", "🔮 Kịch bản AI"])
 
 with t1:
@@ -81,5 +73,23 @@ with t4:
         c, ma, v, v_ma = d_idx.iloc[-1]['close'], d_idx.iloc[-1]['MA20'], d_idx.iloc[-1]['volume'], d_idx.iloc[-1]['V_MA20']
         adv, dec = len(d_board[d_board['%'] > 0]), len(d_board[d_board['%'] < 0])
         sc = sum([c > ma, v > v_ma, adv > dec])
-        col, txt = ['#ff4d4d', '#f5b041', '#00e676', '#cc00ff'][sc], ["TIÊU CỰC", "THẬN TRỌNG", "TÍCH CỰC", "RẤT TÍCH CỰC"][sc]
-        st.markdown(f"<div class='card'><h3 style='color:{col}'>{txt} ({
+        
+        colors = ['#ff4d4d', '#f5b041', '#00e676', '#cc00ff']
+        texts = ["TIÊU CỰC", "THẬN TRỌNG", "TÍCH CỰC", "RẤT TÍCH CỰC"]
+        col, txt = colors[sc], texts[sc]
+        
+        # Đã xử lý biến bên ngoài f-string để chống lỗi SyntaxError
+        gia_status = "trên" if c > ma else "dưới"
+        kl_status = "vượt" if v > v_ma else "dưới"
+        action = "Gia tăng tỷ trọng" if sc >= 2 else "Quản trị rủi ro"
+        
+        # Viết HTML thành khối nhiều dòng, an toàn tuyệt đối khi copy
+        html_content = f"""
+        <div class='card'>
+            <h3 style='color:{col}'>{txt} ({sc}/3 Điểm)</h3>
+            <p>Giá <b>{gia_status}</b> MA20 | KL <b>{kl_status}</b> TB | Tăng: {adv} / Giảm: {dec}</p>
+            <hr>
+            <p>👉 <b>Hành động:</b> {action}</p>
+        </div>
+        """
+        st.markdown(html_content, unsafe_allow_html=True)
