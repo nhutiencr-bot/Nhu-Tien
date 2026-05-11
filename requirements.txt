@@ -4,3 +4,4 @@ plotly
 requests
 beautifulsoup4
 vnstock==0.2.8.2
+pytz
