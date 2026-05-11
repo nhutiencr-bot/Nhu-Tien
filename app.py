@@ -54,7 +54,7 @@ MAP_COLORS = [
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'}
 
-# 4. HÀM LẤY DỮ LIỆU
+# 4. HÀM LẤY DỮ LIỆU (Sử dụng chuẩn @st.cache_data)
 @st.cache_data(ttl=60)
 def get_market_data():
     try:
@@ -67,4 +67,69 @@ def get_market_data():
     except: 
         return pd.DataFrame()
 
-@st.cache
+@st.cache_data(ttl=60)
+def get_index_contrib():
+    try:
+        url = "https://finfo-api.vndirect.com.vn/v4/index_events?q=code:VNINDEX&sort=point~DESC&size=50"
+        res = requests.get(url, headers=HEADERS, timeout=5).json()
+        df = pd.DataFrame(res['data'])[['ticker', 'point']].rename(columns={'ticker': 'Mã CK', 'point': 'Điểm'})
+        df['Điểm'] = pd.to_numeric(df['Điểm'])
+        return df
+    except: 
+        return pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def get_vnindex_daily():
+    try:
+        df = stock_historical_data('VNINDEX', start_hist, end_date, '1D', 'index')
+        df['MA20'] = df['close'].rolling(20).mean()
+        df['V_MA20'] = df['volume'].rolling(20).mean()
+        return df.dropna().reset_index(drop=True)
+    except: 
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_cafef_rss():
+    res = []
+    try:
+        xml_data = requests.get("https://cafef.vn/rss/chung-khoan.rss", headers=HEADERS, timeout=10).text
+        root = ET.fromstring(xml_data)
+        for item in root.findall('./channel/item')[:30]:
+            title = item.find('title').text
+            link = item.find('link').text
+            pubDate = item.find('pubDate').text
+            
+            match = re.search(r'\b([A-Z]{3})\b', title)
+            ticker = match.group(1) if match else "Thị trường"
+            
+            action = "TIN TỨC"
+            if "mua" in title.lower() or "tăng" in title.lower():
+                action = "CHÚ Ý"
+            elif "bán" in title.lower() or "giảm" in title.lower():
+                action = "CẢNH BÁO"
+                
+            res.append({
+                "Ngày": pubDate[5:16], 
+                "Mã CK": ticker, 
+                "Đánh giá": action, 
+                "Tiêu đề Báo cáo": title, 
+                "Link": link
+            })
+    except: 
+        pass
+    return pd.DataFrame(res)
+
+# 5. HIỂN THỊ GIAO DIỆN
+with st.spinner("Đang kết nối siêu tốc lấy Dữ liệu VNDirect..."):
+    df_100 = get_market_data()
+    df_idx_daily = get_vnindex_daily()
+    df_reports = get_cafef_rss()
+
+t1, t2, t3, t4, t5 = st.tabs(["📈 VN-INDEX & Đóng góp", "🗺️ Bản đồ Dòng tiền", "📊 Top 100 Cổ phiếu", "📝 Báo cáo CafeF", "🔮 AI Kịch Bản"])
+
+with t1:
+    with st.spinner("Đang vẽ biểu đồ VN-INDEX..."):
+        try:
+            df_idx = stock_historical_data('VNINDEX', start_index, end_date, '1', 'index')
+            if not df_idx.empty:
+                df_
