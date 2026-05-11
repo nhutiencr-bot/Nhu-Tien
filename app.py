@@ -200,3 +200,174 @@ with t1:
             f"{cur:,.2f}", 
             f"{cur-prev:+,.2f} ({((cur-prev)/prev*100):+,.2f}%)"
         )
+        st.divider()
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### 🌊 Thanh khoản (So với TBC 20 Phiên)")
+            v = idx_data['volume']
+            v_ma = idx_data['V_MA20']
+            
+            fig = go.Figure(go.Bar(
+                x=['Hôm nay (LIVE)', 'Trung bình 20 Phiên (MA20)'], 
+                y=[v, v_ma], 
+                marker_color=[C_GREEN if v > v_ma else C_REF, 'rgba(150,150,150,0.5)'],
+                text=[f"{v:,.0f}", f"{v_ma:,.0f}"],
+                textposition='auto'
+            ))
+            fig.update_layout(height=380, margin=dict(l=10, r=10, t=30, b=10), plot_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with c2:
+            st.markdown("#### 🎯 Tác động điểm số tới VN-INDEX")
+            df_c = get_index_contrib()
+            if not df_c.empty:
+                df_res = pd.concat([df_c[df_c['Điểm']>0].nlargest(7, 'Điểm'), df_c[df_c['Điểm']<0].nsmallest(7, 'Điểm')]).sort_values('Điểm', ascending=False)
+                b_cols = [C_GREEN if v > 0 else C_RED for v in df_res['Điểm']]
+                fig_b = go.Figure(go.Bar(x=df_res['Mã CK'], y=df_res['Điểm'], marker_color=b_cols, text=df_res['Điểm'].apply(lambda x: f"{x:+.2f}"), textposition='outside'))
+                fig_b.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig_b, use_container_width=True)
+            elif not df_200.empty:
+                df_res = pd.concat([df_200.nlargest(7, '%'), df_200.nsmallest(7, '%')]).sort_values('%', ascending=False)
+                b_cols = [C_GREEN if v > 0 else C_RED for v in df_res['%']]
+                fig_b = go.Figure(go.Bar(x=df_res['Mã CK'], y=df_res['%'], marker_color=b_cols, text=df_res['%'].apply(lambda x: f"{x:+.2f}%"), textposition='outside'))
+                fig_b.update_layout(height=380, margin=dict(l=10,r=10,t=10,b=10), plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig_b, use_container_width=True)
+
+# TAB 2: BẢN ĐỒ DÒNG TIỀN
+with t2:
+    if not df_200.empty:
+        fig_m = px.treemap(
+            df_200, 
+            path=[px.Constant("Thị Trường"), 'Mã CK'], 
+            values='Tổng GT',  # Vẽ khối theo Giá trị giao dịch như yêu cầu
+            color='%', 
+            color_continuous_scale=MAP_COLORS, 
+            range_color=[-7, 7]
+        )
+        fig_m.update_traces(
+            texttemplate="<b>%{label}</b><br>%{customdata[0]:+.2f}%", 
+            customdata=df_200[['%', 'Tổng KL']]
+        )
+        st.plotly_chart(fig_m.update_layout(height=650, margin=dict(t=10,l=0,r=0,b=0)), use_container_width=True)
+    else: 
+        st.warning("Dữ liệu đang được tải, vui lòng bấm Cập nhật Live.")
+
+# TAB 3 & 4: BẢNG GIÁ
+with t3:
+    if not df_200.empty:
+        st.markdown("### 📊 Top 200 Cổ Phiếu Giao Dịch Mạnh Nhất Toàn Thị Trường")
+        st.dataframe(
+            df_200.style.format({
+                'Giá': '{:,.2f}', 
+                '+/-': '{:+,.2f}', 
+                '%': '{:+,.2f}%', 
+                'Tổng KL': '{:,.0f}',
+                'Tổng GT': '{:,.0f}'
+            }).map(style_v, subset=['+/-', '%']), 
+            use_container_width=True, 
+            hide_index=True, 
+            height=600
+        )
+
+with t4:
+    if not df_gainers.empty:
+        st.markdown("### 🚀 Top 10 Cổ Phiếu Tăng Mạnh Nhất")
+        st.dataframe(
+            df_gainers.style.format({
+                'Giá': '{:,.2f}', 
+                '+/-': '{:+,.2f}', 
+                '%': '{:+,.2f}%', 
+                'Tổng KL': '{:,.0f}',
+                'Tổng GT': '{:,.0f}'
+            }).map(style_v, subset=['+/-', '%']), 
+            use_container_width=True, 
+            hide_index=True, 
+            height=400
+        )
+
+# TAB 5: TIN TỨC
+with t5:
+    if not df_reports.empty:
+        st.markdown("### 📝 Điểm Tin Thị Trường (VNExpress)")
+        st.dataframe(
+            df_reports.style.map(
+                lambda v: f'color: {C_GREEN if "TÍCH CỰC" in str(v) else C_RED if "TIÊU CỰC" in str(v) else C_REF}; font-weight:bold;', 
+                subset=['Phân loại']
+            ), 
+            column_config={"Link": st.column_config.LinkColumn("Đọc bài")}, 
+            hide_index=True, 
+            use_container_width=True, 
+            height=600
+        )
+
+# TAB 6: AI KỊCH BẢN
+with t6:
+    if idx_data and not df_200.empty:
+        c = idx_data['close']
+        ma = idx_data['MA20']
+        v = idx_data['volume']
+        v_ma = idx_data['V_MA20']
+        
+        # Đếm thực tế Tăng / Giảm từ Top 200
+        adv = len(df_200[df_200['%'] > 0])
+        dec = len(df_200[df_200['%'] < 0])
+        
+        ai_score = 0
+        
+        # 1. Chấm điểm Giá
+        if c > ma:
+            gia_st, gia_col = "Nằm TRÊN", C_GREEN
+            ai_score += 1
+        else:
+            gia_st, gia_col = "Rơi XUỐNG DƯỚI", C_RED
+            
+        # 2. Chấm điểm Khối lượng
+        vol_ratio = (v / v_ma) * 100 if v_ma > 0 else 0
+        if vol_ratio >= 120:
+            kl_st, kl_col = f"Bùng nổ ({vol_ratio:.1f}% MA20)", C_CEIL
+            ai_score += 1 if c > ma else -1
+        elif vol_ratio >= 80:
+            kl_st, kl_col = f"Ổn định ({vol_ratio:.1f}% MA20)", C_GREEN
+            ai_score += 1
+        else:
+            kl_st, kl_col = f"Suy yếu ({vol_ratio:.1f}% MA20)", C_RED
+            
+        # 3. Chấm điểm Độ rộng
+        if adv > dec * 1.5:
+            rong_st, rong_col = f"Lan tỏa cực mạnh ({adv} Tăng / {dec} Giảm)", C_CEIL
+            ai_score += 1
+        elif adv > dec:
+            rong_st, rong_col = f"Tích cực ({adv} Tăng / {dec} Giảm)", C_GREEN
+            ai_score += 1
+        elif dec > adv * 1.5:
+            rong_st, rong_col = f"Bán tháo diện rộng ({adv} Tăng / {dec} Giảm)", C_RED
+            ai_score -= 1
+        else:
+            rong_st, rong_col = f"Áp lực bán nhỉnh hơn ({adv} Tăng / {dec} Giảm)", C_LRED
+        
+        html_ai_status = f"""
+        <div class='card' style='background: linear-gradient(145deg, #1e1e2f 0%, #2a2a40 100%);'>
+            <h2 style='color:#00e5ff; margin-top:0;'>🤖 AI ĐÁNH GIÁ THỊ TRƯỜNG LIVE</h2>
+            <ul style='font-size: 17px; line-height: 1.8;'>
+                <li><b>Hành động Giá:</b> VN-INDEX đang ở mức <b>{c:,.2f}</b>, <b style='color:{gia_col}'>{gia_st}</b> ngưỡng hỗ trợ MA20 ({ma:,.2f}).</li>
+                <li><b>Động lượng Khối lượng:</b> Đạt {v/1000000:,.1f} triệu CP so với Trung bình {v_ma/1000000:,.1f} triệu CP. Dòng tiền <b style='color:{kl_col}'>{kl_st}</b>.</li>
+                <li><b>Độ rộng thị trường (Rổ 200 mã lớn nhất):</b> Trạng thái <b style='color:{rong_col}'>{rong_st}</b>.</li>
+            </ul>
+        </div><br>
+        """
+        st.markdown(html_ai_status, unsafe_allow_html=True)
+        
+        if ai_score >= 2:
+            sc_color, sc_title, sc_desc = C_GREEN, "🟢 Kịch Bản 1: Bứt phá đi lên (Khả năng cao nhất)", "Dòng tiền lan tỏa tốt. Gia tăng tỷ trọng cổ phiếu, tập trung nhóm đang hút dòng tiền (Màu Tím/Xanh đậm trên bản đồ nhiệt). Mở mua mới các mã có nền tích lũy."
+        elif ai_score == 1:
+            sc_color, sc_title, sc_desc = C_REF, "🟡 Kịch Bản 2: Đi ngang giằng co (Khả năng cao nhất)", "Thị trường phân hóa mạnh, kéo trụ xả midcap. Duy trì tỷ trọng 50/50. Tuyệt đối không FOMO giá xanh. Canh chốt lời ngắn hạn ở kháng cự."
+        else:
+            sc_color, sc_title, sc_desc = C_RED, "🔴 Kịch Bản 3: Điều chỉnh giảm (Khả năng cao nhất)", "Lực bán áp đảo, cầu suy yếu. Quản trị rủi ro đặt lên hàng đầu. Hạ tỷ trọng Margin về 0. Kiên quyết cắt lỗ các mã vi phạm hỗ trợ. Đứng ngoài quan sát."
+
+        st.markdown(f"""
+        <div class='scenario-box' style='background-color: rgba(255,255,255,0.05); border-left: 5px solid {sc_color};'>
+            <h3 style='color:{sc_color}; margin-top:0;'>{sc_title}</h3>
+            <p style='font-size:16px;'>{sc_desc}</p>
+        </div>
+        """, unsafe_allow_html=True)
