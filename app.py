@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 import pytz
 import plotly.express as px
 import plotly.graph_objects as go
-import concurrent.futures
 import requests
+import time
 
 # 1. CÀI ĐẶT GIAO DIỆN & TIÊM CSS LÀM MƯỢT UI
 st.set_page_config(page_title="Fairy Invest", page_icon="🧚‍♀️", layout="wide")
@@ -66,39 +66,41 @@ MAP_COLORS = [
     [0.501, C_GREEN], [0.985, C_GREEN], [0.985, C_CEIL], [1.0, C_CEIL]
 ]
 
-# 4. HÀM LẤY DỮ LIỆU
-@st.cache_data(ttl=300)
-def get_hose_tickers():
-    try:
-        df = listing_companies()
-        return df[df['comGroupCode'] == 'HOSE']['ticker'].tolist()
-    except: return []
-
-@st.cache_data(ttl=120)
+# 4. HÀM LẤY DỮ LIỆU ĐÃ FIX REAL-TIME 13/05
+@st.cache_data(ttl=15) # Giảm TTL xuống 15 giây để nhảy số mượt hơn
 def get_market_data():
-    tickers = get_hose_tickers()
-    def fetch(t):
-        try:
-            d = stock_historical_data(t, start_stock, end_date, '1D', 'stock')
-            if len(d) < 2: return None
-            curr, prev = d.iloc[-1]['close'], d.iloc[-2]['close']
-            return {
-                'Mã CK': t, 'Giá': curr, '+/-': round(curr-prev, 2),
-                '%': round((curr-prev)/prev*100, 2), 
-                'Tổng KL': int(d.iloc[-1]['volume'])
-            }
-        except: return None
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as exe:
-        res = list(exe.map(fetch, tickers))
-    
-    df = pd.DataFrame([r for r in res if r])
-    return df.sort_values('Tổng KL', ascending=False).head(100) if not df.empty else df
+    """ 
+    FIX: Gọi thẳng API Bảng giá Real-time thay vì dùng hàm Historical 1D cũ.
+    Python request không bị lỗi CORS nên không cần qua Proxy gây dính Cache.
+    """
+    try:
+        # Thêm timestamp vào cuối URL để lách mọi bộ nhớ đệm (Cache-busting)
+        ts = int(time.time())
+        url = f"https://finfo-api.vndirect.com.vn/v4/stock_prices?sort=accumulatedVal~DESC&q=floor:HOSE&size=100&_t={ts}"
+        
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        if r.status_code == 200:
+            data = r.json()['data']
+            res = []
+            for item in data:
+                res.append({
+                    'Mã CK': item.get('code'),
+                    'Giá': item.get('matchPrice', 0),
+                    '+/-': item.get('priceChange', 0),
+                    '%': item.get('changePc', 0),
+                    'Tổng KL': item.get('accumulatedVol', 0)
+                })
+            return pd.DataFrame(res)
+    except Exception as e:
+        pass
+    return pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def get_index_contrib():
     try:
-        url = "https://apipubaws.tcbs.com.vn/stock-insight/v1/intraday/index/ticker-contribute?index=VNINDEX"
+        # Thêm timestamp chống cache
+        ts = int(time.time())
+        url = f"https://apipubaws.tcbs.com.vn/stock-insight/v1/intraday/index/ticker-contribute?index=VNINDEX&_t={ts}"
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         if r.status_code == 200:
             d = pd.DataFrame(r.json()['data'])
@@ -115,6 +117,7 @@ t1, t2, t3 = st.tabs(["📈 VN-INDEX & Đóng góp", "🗺️ Bản đồ Dòng 
 with t1:
     with st.spinner("Đang vẽ biểu đồ VN-INDEX..."):
         try:
+            # Lấy chart Real-time 1 phút từ vnstock (Giữ nguyên logic của bạn)
             df_idx = stock_historical_data('VNINDEX', start_index, end_date, '1', 'index')
             if not df_idx.empty:
                 df_idx['date'] = pd.to_datetime(df_idx['time']).dt.date
@@ -178,3 +181,7 @@ with t3:
         st.markdown("### Top 100 Cổ Phiếu Giao Dịch Mạnh Nhất")
         st.dataframe(df_100.style.format({'Giá': '{:,.2f}', '+/-': '{:+,.2f}', '%': '{:+,.2f}%', 'Tổng KL': '{:,.0f}'})
                      .map(style_v, subset=['+/-', '%']), use_container_width=True, hide_index=True, height=600)
+
+if is_trading:
+    time.sleep(15)
+    st.rerun()
