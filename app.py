@@ -2,11 +2,22 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 from vnstock import listing_companies
-import pytz
+# Đã xóa pytz theo yêu cầu trước đó, nhưng nếu trong code cũ vẫn còn dùng vn_tz thì bạn cần giữ lại thư viện này hoặc dùng datetime gốc nhé.
+import pytz 
 import plotly.graph_objects as go
 import plotly.express as px
 import requests
 import time
+
+# ---------------------------------------------------------
+# 🌟 BƯỚC BỔ SUNG 1: Gọi hàm từ file google_sheet_api.py
+# ---------------------------------------------------------
+try:
+    from google_sheet_api import update_dataframe_to_sheet
+    SHEET_API_READY = True
+except ImportError:
+    SHEET_API_READY = False
+# ---------------------------------------------------------
 
 # ==========================================
 # 1. CẤU HÌNH GIAO DIỆN & TỐI ƯU CSS
@@ -38,21 +49,17 @@ C_RED, C_DRED, C_FLOOR = '#ff4d4d', '#b30000', '#00e5ff'
 MAP_COLORS = [[0.0, C_FLOOR], [0.014, C_FLOOR], [0.014, C_DRED], [0.285, C_DRED], [0.285, C_RED], [0.499, C_RED], [0.499, C_REF], [0.501, C_REF], [0.501, C_GREEN], [0.985, C_GREEN], [0.985, C_CEIL], [1.0, C_CEIL]]
 
 # ==========================================
-# 2. LÕI DỮ LIỆU SIÊU TỐC & KHÔNG DÙNG CACHE CHO LIVE DATA
+# 2. LÕI DỮ LIỆU SIÊU TỐC
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_sectors():
-    """Lấy danh sách nhóm ngành (Cache 1 ngày)"""
     try:
         df = listing_companies()
         return df[['ticker', 'sector']].set_index('ticker').to_dict()['sector']
     except: return {}
 
-# XÓA BỎ @st.cache_data Ở ĐÂY ĐỂ ÉP CẬP NHẬT REAL-TIME LIÊN TỤC
 def get_live_market_data():
-    """Lấy Top 100 theo KHỐI LƯỢNG lớn nhất - KHÔNG LƯU CACHE"""
     try:
-        # sort=accumulatedVol~DESC (Sắp xếp theo Khối lượng)
         url = f"https://finfo-api.vndirect.com.vn/v4/stock_prices?sort=accumulatedVol~DESC&q=floor:HOSE&size=100&_t={int(time.time())}"
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
         if r.status_code == 200:
@@ -74,7 +81,6 @@ def get_live_market_data():
 
 @st.cache_data(ttl=60)
 def get_live_index_chart():
-    """Lấy Dữ liệu Biểu đồ VNINDEX 1 phút"""
     try:
         ts_now = int(time.time())
         ts_start = ts_now - (5 * 86400) 
@@ -91,7 +97,6 @@ def get_live_index_chart():
 
 @st.cache_data(ttl=60)
 def get_index_contrib():
-    """Lấy dữ liệu Tác động VN-INDEX"""
     try:
         url = f"https://apipubaws.tcbs.com.vn/stock-insight/v1/intraday/index/ticker-contribute?index=VNINDEX&_t={int(time.time())}"
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
@@ -107,6 +112,27 @@ with st.spinner("Đang kết nối luồng dữ liệu thời gian thực..."):
     df_100 = get_live_market_data()
     df_idx = get_live_index_chart()
     df_c = get_index_contrib()
+
+# ---------------------------------------------------------
+# 🌟 BƯỚC BỔ SUNG 2: Thêm Sidebar Quản lý báo cáo
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("📑 Xuất Báo Cáo")
+    st.write("Đồng bộ dữ liệu sang Google Sheets.")
+    
+    # Thay bằng tên file Sheet bạn đã share quyền Editor
+    TEN_FILE_SHEET = "Bao_Cao_Chung_Khoan_NhuTien" 
+    
+    if st.button("Lưu Top 100 KL lên Sheets", type="primary", use_container_width=True):
+        if not df_100.empty and SHEET_API_READY:
+            with st.spinner("Đang kết nối API..."):
+                update_dataframe_to_sheet(TEN_FILE_SHEET, df_100)
+            st.success(f"✅ Đã lưu thành công vào file: {TEN_FILE_SHEET}")
+        elif not SHEET_API_READY:
+            st.error("Chưa kết nối được file google_sheet_api.py")
+        else:
+            st.warning("Dữ liệu Top 100 đang trống, thử lại sau.")
+# ---------------------------------------------------------
 
 t1, t2, t3 = st.tabs(["📈 VN-INDEX & Thanh Khoản", "🗺️ Bản đồ Dòng tiền", "📊 Top 100 Khối Lượng"])
 
@@ -162,10 +188,4 @@ with t3:
             elif v == 0: c = C_REF
             elif v > -3: c = C_RED
             else: c = C_DRED
-            return f'color: {c}; font-weight: bold;'
-        
-        st.dataframe(df_100.style.format({'Giá': '{:,.2f}', '+/-': '{:+,.2f}', '%': '{:+,.2f}%', 'Tổng KL': '{:,.0f}'}).map(style_v, subset=['+/-', '%']), use_container_width=True, hide_index=True, height=600)
-
-if is_trading:
-    time.sleep(30)
-    st.rerun()
+            return f'color: {c}; font-weight: bold
