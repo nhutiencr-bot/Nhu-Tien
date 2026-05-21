@@ -5,17 +5,17 @@ on:
     # Chạy tự động vào lúc 15:10 chiều giờ Việt Nam (08:10 UTC) từ Thứ 2 đến Thứ 6
     - cron: '10 8 * * 1-5'
   
-  workflow_dispatch: # Giữ lại dòng này để bạn có nút bấm chạy thủ công kiểm tra code
+  workflow_dispatch:
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
     steps:
       - name: Lấy mã nguồn từ GitHub
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # Đã nâng cấp lên v4
 
       - name: Cài đặt Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5  # Đã nâng cấp lên v5
         with:
           python-version: '3.10'
 
