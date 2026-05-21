@@ -27,4 +27,4 @@ jobs:
           echo "$GCP_CREDENTIALS" > credentials.json
 
       - name: Chạy script cập nhật dữ liệu
-        run: python auto_update.py
+        run: python lay_du_lieu_moi.py
