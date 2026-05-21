@@ -1,25 +1,29 @@
 import pandas as pd
 import yfinance as yf
-from vnstock import listing_companies
+from vnstock3 import Vnstock
 from google_sheet_api import update_dataframe_to_sheet
 
 def get_market_data_safe():
-    """Dùng vnstock lấy danh sách ngành + yfinance lấy giá để né chặn IP VNDirect"""
+    """Dùng vnstock3 lấy danh sách ngành (Server TCBS) + yfinance lấy giá để né chặn IP"""
     try:
-        print("1. Đang tải danh sách mã và nhóm ngành từ vnstock...")
-        df_listing = listing_companies()
+        print("1. Đang tải danh sách mã và nhóm ngành từ vnstock3 (Nguồn TCBS)...")
+        # Khởi tạo vnstock3 với nguồn mặc định (thường là TCBS, ổn định hơn)
+        stock = Vnstock().stock(symbol='SSI', source='TCBS')
+        
+        # Lấy danh sách toàn bộ mã chứng khoán
+        df_listing = stock.listing.all_symbols()
         
         # Lọc các mã sàn HOSE
-        df_hose = df_listing[df_listing['comGroupCode'] == 'HOSE'].copy() if 'comGroupCode' in df_listing.columns else df_listing
+        df_hose = df_listing[df_listing['exchange'] == 'HOSE'].copy() if 'exchange' in df_listing.columns else df_listing
         hose_tickers = df_hose['ticker'].tolist()
         
         # Mapping Nhóm ngành
-        sector_col = 'sector' if 'sector' in df_listing.columns else ('industry' if 'industry' in df_listing.columns else 'groupName')
+        sector_col = 'icb_name3' if 'icb_name3' in df_listing.columns else ('industry' if 'industry' in df_listing.columns else 'group_name')
         sectors = {}
         if sector_col in df_listing.columns:
             sectors = df_listing[['ticker', sector_col]].set_index('ticker').to_dict()[sector_col]
 
-        print(f"2. Đang tải bảng giá {len(hose_tickers)} mã từ Yahoo Finance (Hoàn toàn độc lập với CTCK)...")
+        print(f"2. Đang tải bảng giá {len(hose_tickers)} mã từ Yahoo Finance (Hoàn toàn độc lập với CTCK Việt Nam)...")
         tickers_hm = [f"{t}.HM" for t in hose_tickers]
         
         data = yf.download(tickers_hm, period="5d", threads=True, progress=False)
@@ -64,7 +68,7 @@ def get_market_data_safe():
         return pd.DataFrame()
 
 if __name__ == "__main__":
-    print("--- BẮT ĐẦU CHẠY AUTO UPDATE (VNSTOCK + YFINANCE) ---")
+    print("--- BẮT ĐẦU CHẠY AUTO UPDATE (VNSTOCK3 + YFINANCE) ---")
     
     df_100 = get_market_data_safe()
     
