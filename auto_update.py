@@ -1,92 +1,81 @@
 import pandas as pd
-import time
-from vnstock import listing_companies, price_board
+import yfinance as yf
 from google_sheet_api import update_dataframe_to_sheet
 
-def get_live_market_data():
-    """Lấy dữ liệu Top 100 HOSE có khối lượng giao dịch cao nhất bằng thư viện vnstock"""
+def get_live_market_data_yfinance():
+    """Lấy dữ liệu chứng khoán Việt Nam qua Yahoo Finance để tránh bị chặn IP trên Cloud"""
     try:
-        print("Đang tải danh sách công ty và nhóm ngành từ vnstock...")
-        # 1. Lấy danh sách toàn bộ công ty
-        df_listing = listing_companies()
+        # 1. Danh sách các mã phổ biến (Bạn có thể thêm bớt tùy ý để đủ 100 mã)
+        # Yahoo Finance quy định mã sàn HOSE phải có đuôi ".HM"
+        tickers = [
+            "SSI", "VND", "HCM", "VCI", "HPG", "HSG", "NKG", "VHM", "VIC", "VRE",
+            "VCB", "CTG", "BID", "TCB", "MBB", "VPB", "STB", "ACB", "TPB", "HDB",
+            "FPT", "MWG", "PNJ", "MSN", "VNM", "SAB", "GAS", "PLX", "POW", "GVR",
+            "NVL", "PDR", "DIG", "DXG", "KBC", "VGC", "IDC", "KDH", "NLG", "HDG",
+            "DGC", "DPM", "DCM", "CSV", "VHC", "ANV", "IDI", "PC1", "REE", "GEG"
+        ]
         
-        # Lọc lấy các mã thuộc sàn HOSE
-        df_hose = df_listing[df_listing['comGroupCode'] == 'HOSE'].copy() if 'comGroupCode' in df_listing.columns else df_listing
-        hose_tickers = df_hose['ticker'].tolist()
+        tickers_hm = [f"{t}.HM" for t in tickers]
+        print(f"Đang tải dữ liệu {len(tickers)} mã từ Yahoo Finance...")
         
-        # Xây dựng từ điển mapping Nhóm ngành linh hoạt (tùy phiên bản vnstock)
-        sector_col = 'sector' if 'sector' in df_listing.columns else ('industry' if 'industry' in df_listing.columns else 'groupName')
-        sectors = {}
-        if sector_col in df_listing.columns:
-            sectors = df_listing[['ticker', sector_col]].set_index('ticker').to_dict()[sector_col]
-
-        print(f"Đã tìm thấy {len(hose_tickers)} mã trên HOSE. Đang tải bảng giá (có thể mất vài giây)...")
+        # 2. Tải dữ liệu 5 phiên gần nhất (để lấy giá đóng cửa phiên trước làm tham chiếu)
+        # yfinance sẽ tải đồng loạt nên tốc độ rất nhanh
+        data = yf.download(tickers_hm, period="5d", threads=True, progress=False)
         
-        # 2. Lấy dữ liệu bảng giá theo từng cụm (chunk) để tránh lỗi URL quá dài từ API
-        chunk_size = 50
-        df_price_list = []
+        records = []
         
-        for i in range(0, len(hose_tickers), chunk_size):
-            chunk = hose_tickers[i:i + chunk_size]
+        for t_base in tickers:
+            t_hm = f"{t_base}.HM"
             try:
-                df_chunk = price_board(chunk)
-                if not df_chunk.empty:
-                    df_price_list.append(df_chunk)
-            except Exception as e:
-                print(f"Lỗi khi lấy dữ liệu cụm {chunk[0]}... : {e}")
-            time.sleep(0.3) # Nghỉ một chút để tránh bị server chặn (Rate limit)
+                # Trích xuất dữ liệu của từng mã
+                closes = data['Close'][t_hm].dropna()
+                volumes = data['Volume'][t_hm].dropna()
+                
+                if len(closes) < 2: # Bỏ qua nếu dữ liệu không đủ (VD: mã mới lên sàn)
+                    continue
+                    
+                # Tính toán giá tham chiếu và giá hiện tại
+                ref_price = closes.iloc[-2]     # Giá đóng cửa phiên trước đó
+                current_price = closes.iloc[-1] # Giá hiện tại (hoặc đóng cửa phiên nay)
+                volume = volumes.iloc[-1]       # Khối lượng giao dịch hiện tại
+                
+                change = current_price - ref_price
+                pct_change = (change / ref_price) * 100 if ref_price > 0 else 0
+                
+                records.append({
+                    'Mã CK': t_base,
+                    'Nhóm Ngành': 'Thị trường VN', # Yahoo ko phân ngành tiếng Việt, gán mặc định
+                    'Giá': round(current_price / 1000, 2), # Chia 1000 để giống bảng giá VN (VD: 34500 -> 34.5)
+                    '+/-': round(change / 1000, 2),
+                    '%': round(pct_change, 2),
+                    'Tổng KL': int(volume)
+                })
+            except Exception:
+                continue
+                
+        # 3. Tạo DataFrame và sắp xếp theo Khối Lượng
+        df_res = pd.DataFrame(records)
+        
+        if not df_res.empty:
+            df_res = df_res.sort_values(by='Tổng KL', ascending=False).reset_index(drop=True)
             
-        if not df_price_list:
-            print("⚠️ Cảnh báo: Không lấy được dữ liệu bảng giá nào.")
-            return pd.DataFrame()
-
-        # Gộp tất cả các cụm lại thành 1 bảng duy nhất
-        df_price = pd.concat(df_price_list, ignore_index=True)
-
-        # 3. Chuẩn hóa tên cột
-        df_res = pd.DataFrame()
-        
-        # Tìm đúng tên cột chứa mã cổ phiếu
-        col_ma = 'Mã CP' if 'Mã CP' in df_price.columns else ('Mã' if 'Mã' in df_price.columns else 'ticker')
-        if col_ma not in df_price.columns:
-            print("⚠️ Không tìm thấy cột Mã CK trong dữ liệu trả về.")
-            return pd.DataFrame()
-            
-        df_res['Mã CK'] = df_price[col_ma]
-        df_res['Nhóm Ngành'] = df_res['Mã CK'].map(sectors).fillna('Khác')
-        
-        # Xử lý linh hoạt các tên cột bảng giá
-        col_gia = 'Giá Khớp Lệnh' if 'Giá Khớp Lệnh' in df_price.columns else 'Giá'
-        col_kl = 'KL Khớp Lệnh' if 'KL Khớp Lệnh' in df_price.columns else ('Khối Lượng' if 'Khối Lượng' in df_price.columns else 'KL')
-        
-        df_res['Giá'] = df_price[col_gia] if col_gia in df_price.columns else 0
-        df_res['+/-'] = df_price['+/-'] if '+/-' in df_price.columns else 0
-        df_res['%'] = df_price['%'] if '%' in df_price.columns else 0
-        
-        # Nhân 10 khối lượng và ép kiểu dữ liệu về số học để đảm bảo có thể sort (tránh dính text)
-        df_res['Tổng KL'] = (df_price[col_kl] * 10) if col_kl in df_price.columns else 0
-        df_res['Tổng KL'] = pd.to_numeric(df_res['Tổng KL'], errors='coerce').fillna(0)
-
-        # 4. Sắp xếp theo Tổng Khối Lượng từ cao xuống thấp và CẮT LẤY TOP 100
-        df_res = df_res.sort_values(by='Tổng KL', ascending=False).head(100).reset_index(drop=True)
-        
         return df_res
 
     except Exception as e:
-        print(f"❌ Lỗi tổng thể khi lấy dữ liệu bằng vnstock: {e}")
+        print(f"❌ Lỗi tổng thể khi lấy dữ liệu bằng yfinance: {e}")
         return pd.DataFrame()
 
 if __name__ == "__main__":
-    print("--- BẮT ĐẦU CHẠY AUTO UPDATE ---")
+    print("--- BẮT ĐẦU CHẠY AUTO UPDATE QUA YAHOO FINANCE ---")
     
-    df_100 = get_live_market_data()
+    df_100 = get_live_market_data_yfinance()
     
     if not df_100.empty:
         TEN_FILE_SHEET = "Bao_Cao_Chung_Khoan_NhuTien"
-        print(f"✅ Đã lấy thành công {len(df_100)} mã chứng khoán (Top 100 Khối Lượng).")
+        print(f"✅ Đã xử lý thành công {len(df_100)} mã chứng khoán.")
         print(f"Đang đồng bộ lên Google Sheet: {TEN_FILE_SHEET} ...")
         
-        # Đẩy dữ liệu qua module google_sheet_api.py
+        # Đẩy dữ liệu qua module google_sheet_api.py của bạn
         success, message = update_dataframe_to_sheet(TEN_FILE_SHEET, df_100)
         
         if success:
