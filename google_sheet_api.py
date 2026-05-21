@@ -1,25 +1,29 @@
+import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
-import streamlit as st  # 🌟 BẮT BUỘC PHẢI CÓ DÒNG NÀY
+import streamlit as st  # 🌟 Vẫn giữ nguyên để phục vụ UI
 
 CREDENTIALS_FILE = 'credentials.json'
 
 def get_sheet_client():
-    """Hàm khởi tạo kết nối với Google Sheets API"""
+    """Hàm khởi tạo kết nối với Google Sheets API tương thích cho cả Streamlit và GitHub Actions"""
     scope = [
         'https://spreadsheets.google.com/feeds',
         'https://www.googleapis.com/auth/drive'
     ]
     
-    # Nếu chạy trên Streamlit Cloud và đã cấu hình Secrets TOML thành công
-    if "gcp_service_account" in st.secrets:
+    # 1. ƯU TIÊN 1: Chạy trên GitHub Actions hoặc máy tính cá nhân (đã có file credentials.json)
+    if os.path.exists(CREDENTIALS_FILE):
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        
+    # 2. ƯU TIÊN 2: Chạy trên Web Streamlit Cloud (không có file vật lý, phải dùng st.secrets)
+    elif "gcp_service_account" in st.secrets:
         creds = ServiceAccountCredentials.from_json_keyfile_dict(
             dict(st.secrets["gcp_service_account"]), scope
         )
-    # Nếu chạy dưới máy cá nhân (local)
     else:
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        raise Exception("Không tìm thấy thông tin xác thực Google API ở bất kỳ đâu!")
         
     client = gspread.authorize(creds)
     return client
