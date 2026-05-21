@@ -1,3 +1,12 @@
+import streamlit as st
+# Nhớ import hàm mới từ file auto_update.py vào đầu file app.py của bạn
+from auto_update import get_market_data_safe
+
+# ... (các phần code khác của bạn) ...
+
+# Lấy dữ liệu an toàn ngay trước khi dùng tới sidebar
+df_100 = get_market_data_safe()
+
 with st.sidebar:
     st.header("📑 Xuất Báo Cáo")
     st.write("Đồng bộ dữ liệu sang Google Sheets.")
