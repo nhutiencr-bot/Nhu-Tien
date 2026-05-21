@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Lấy mã nguồn từ GitHub
-        uses: actions/checkout@v4  # Đã nâng cấp lên v4
+        uses: actions/checkout@v4
 
       - name: Cài đặt Python
-        uses: actions/setup-python@v5  # Đã nâng cấp lên v5
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
