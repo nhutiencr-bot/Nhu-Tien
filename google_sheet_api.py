@@ -32,7 +32,7 @@ def update_dataframe_to_sheet(sheet_name, df, worksheet_index=0):
         sheet.clear()
         
         data_to_upload = [df.columns.values.tolist()] + df.values.tolist()
-        sheet.update(values=data_to_upload, range_name='A1')
+        sheet.update('A1', data_to_upload)
         return True, "Thành công"
     except Exception as e:
         return False, str(e)
